@@ -62,6 +62,7 @@ export {
   type PrRunner,
 } from './pr/open.js';
 export { isStopRequested, STOP_FILE_NAME } from './fs/stop.js';
+export { loadDotenvFile, parseDotenv } from './config/dotenv.js';
 export {
   writeExecutorArtifacts,
   writeVerdictArtifact,
