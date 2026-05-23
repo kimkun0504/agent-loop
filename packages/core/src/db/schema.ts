@@ -126,4 +126,33 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       ALTER TABLE runs ADD COLUMN pr_url TEXT;
     `,
   },
+  {
+    id: 4,
+    name: 'tasks',
+    sql: `
+      -- A Task is a unit of inbound work from a TaskSource (GitHub issue,
+      -- local file, eval fixture, etc.). One Task -> one Run. Run.task_id
+      -- references this table.
+      --
+      -- The id is a structured string with a source prefix; today the
+      -- only producers are the GitHub source ("github:owner/repo#42"),
+      -- the eval runner ("eval:<name>"), and the hardcoded path
+      -- ("local:hardcoded"). The parsing surface is small.
+      --
+      -- source_metadata_json is forward-compat: GitHub will store labels
+      -- and assignees here without requiring a future migration. Each
+      -- source defines its own shape; the column type stays TEXT (JSON
+      -- blob) so we don't have to know upfront.
+      CREATE TABLE IF NOT EXISTS tasks (
+        id                   TEXT PRIMARY KEY,
+        title                TEXT NOT NULL,
+        body                 TEXT NOT NULL,
+        source               TEXT NOT NULL,
+        created_at           TEXT NOT NULL,
+        url                  TEXT,
+        source_metadata_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
+    `,
+  },
 ];

@@ -108,3 +108,35 @@ describe('migration 3: runs_pr_url', () => {
     expect(m?.sql).toMatch(/ALTER TABLE runs ADD COLUMN pr_url TEXT/);
   });
 });
+
+describe('migration 4: tasks', () => {
+  const m = MIGRATIONS.find((x) => x.id === 4);
+
+  it('exists', () => {
+    expect(m).toBeDefined();
+  });
+
+  it('is named "tasks"', () => {
+    expect(m?.name).toBe('tasks');
+  });
+
+  it('creates the tasks table with id as PRIMARY KEY', () => {
+    expect(m?.sql).toMatch(/CREATE TABLE IF NOT EXISTS tasks\b/);
+    expect(m?.sql).toMatch(/id\s+TEXT\s+PRIMARY\s+KEY/);
+  });
+
+  it('requires title, body, source, created_at; allows null url and metadata', () => {
+    const sql = m?.sql ?? '';
+    expect(sql).toMatch(/title\s+TEXT\s+NOT NULL/);
+    expect(sql).toMatch(/body\s+TEXT\s+NOT NULL/);
+    expect(sql).toMatch(/source\s+TEXT\s+NOT NULL/);
+    expect(sql).toMatch(/created_at\s+TEXT\s+NOT NULL/);
+    // url and source_metadata_json declared without NOT NULL = nullable
+    expect(sql).toMatch(/url\s+TEXT/);
+    expect(sql).toMatch(/source_metadata_json\s+TEXT/);
+  });
+
+  it('indexes tasks by source for fast filter-by-source queries', () => {
+    expect(m?.sql).toMatch(/CREATE INDEX IF NOT EXISTS idx_tasks_source/);
+  });
+});

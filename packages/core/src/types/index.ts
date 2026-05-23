@@ -226,3 +226,34 @@ export interface TestResult {
   /** Truncated to first/last 4KB if larger; full output in artifacts. */
   outputSummary: string;
 }
+
+// --- Task ------------------------------------------------------------------
+
+/**
+ * A unit of inbound work from a TaskSource (GitHub issue, local file,
+ * etc.). One Task → one Run. The Task is the durable record of the
+ * external input; Run.taskId references it.
+ *
+ * The `id` is a structured branded string with a `source:` prefix —
+ * `github:owner/repo#42`, `local:hardcoded`, `eval:add-clamp`. The
+ * source's parsing surface is small (currently just the PR-linking
+ * code), so the structure is honest about its meaning while still
+ * keeping `TaskId` as a single opaque-to-consumers string.
+ *
+ * `sourceMetadata` is forward-compat: GitHub will store labels and
+ * assignees here without requiring a schema migration. Optional and
+ * untyped because each source defines its own shape; consumers that
+ * care about a specific source narrow the type at their use site.
+ */
+export interface Task {
+  id: TaskId;
+  title: string;
+  body: string;
+  /** Stable id of the TaskSource (e.g., "github:owner/repo", "local"). */
+  source: string;
+  createdAt: string;
+  /** External URL for backlinking from artifacts and PRs. */
+  url?: string;
+  /** Source-specific metadata: GitHub labels, assignees, etc. */
+  sourceMetadata?: Record<string, unknown>;
+}
