@@ -26,9 +26,11 @@ import {
   runExitCodeVerifier,
   tick,
   isStopRequested,
+  writeMetaArtifact,
   type Deps,
   type Store,
 } from '@agent-loop/runtime';
+import { join } from 'node:path';
 import { driveToExecuting } from '../drive.js';
 import { NoopPrOpener } from './noopPr.js';
 import { setupEvalEnv, tearDownEvalEnv } from './fixture.js';
@@ -102,6 +104,22 @@ export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
         logger.error('eval: tick threw', { runId, err: String(err) });
         break;
       }
+    }
+
+    // Mirror what cli/start.ts does at terminal: write meta.json into the
+    // per-run artifacts dir so the on-disk artifact set is the same for
+    // eval runs as for production runs. The runtime's writers all use
+    // <artifactsDir>/<runId>/ as the per-run dir; we match that path.
+    const finalRunForMeta = opts.store.getRun(runId);
+    if (finalRunForMeta) {
+      const finalSpec = opts.store.getSpecByRun(runId);
+      const verdicts = opts.store.listVerdicts(runId);
+      writeMetaArtifact(
+        join(env.artifactsDir, runId),
+        finalRunForMeta,
+        finalSpec,
+        verdicts[verdicts.length - 1],
+      );
     }
 
     return summarize(opts.store, opts.task.name, runId);

@@ -99,7 +99,7 @@ Each task targets a node on the skill matrix. Names use the verb-noun shape used
 
 **Pass determination:** `verdict.pass === true` AND `Run.phase === 'done'`. Anything else is a fail.
 
-**Results destination:** `evals/results/<timestamp>/` (timestamp = ISO date-only or unix-seconds), gitignored. Per-task verdicts + raw artifacts live under `<timestamp>/<task-name>/`. `summary.json` is the rollup.
+**Results destination:** `evals/results/<timestamp>/` (timestamp = ISO date-only or unix-seconds), gitignored. `summary.json` and `report.md` are the rollup at the top of that dir. Per-run artifacts (the executor transcript, verdicts, meta) live at `<timestamp>/<task-name>/<runId>/` — the runId nesting matches the runtime's artifact writers (`<artifactsDir>/<runId>/`) so a future `agent-loop inspect --db <evals/runs.db>` works against the same paths. The CHECKPOINT 1 baseline run was the source of this layout correction; the original draft of this plan flattened the runId out, but the code is the source of truth.
 
 ### A4. Metrics captured + reported
 
@@ -759,11 +759,34 @@ Phase D — triage agent                                              (CHECKPOIN
   D2. agents/repoContext.ts
   D3. tickTriaging wires triage into the loop; failure event mapping
   D4. Eval runner gains a "triage mode": task.md -> triage -> spec
-  D5. Add 1-2 new eval tasks that exercise triage specifically
-      (intentionally vague issue body; requires repo introspection)
-  --> CHECKPOINT 2: run eval suite, compare pass rate vs Phase A
-      baseline. Expectation: some pass rate drop on triage-only tasks.
-      Threshold for proceeding: ≥80% on tasks that had ≥80% in baseline.
+  D5. Add 2 new eval tasks that exercise triage specifically. The
+      original 5 are executor-stress; they hit 100% in the Phase A
+      baseline, which means they can only show degradation, not
+      improvement, with triage in the loop. The 2 new tasks are the
+      ones that actually measure triage:
+
+       - **One deliberately vague task** (~50 words, no file paths
+         named). Tests triage's ability to extract structure from
+         minimal input. Without triage the runner's hand-rolled spec
+         from task.md should be too thin for the executor to act on
+         correctly.
+       - **One repo-introspection task** — task description references
+         behavior, not files. The agent has to identify which files
+         matter by reading the repo. Tests triage's use of repoContext.
+
+      Acceptance gate for these 2: triage must produce a valid Spec
+      (not a rejection) AND the executor passes against that spec.
+      Acceptance gate for the BASELINE (no triage): both tasks should
+      FAIL — that's how we know they actually require triage.
+  --> CHECKPOINT 2: run pnpm eval against the 7-task suite. Expected:
+       - Original 5 tasks: ≥80% pass (baseline was 100%; some
+         degradation is acceptable, none would be ideal).
+       - 2 new triage-stress tasks: ≥1 of 2 passing on the first
+         triage prompt — we expect prompt iteration. CHECKPOINT 2 is
+         the prompt-iteration gate, not a single-shot evaluation.
+       - Both new tasks should have FAILED in baseline (run them
+         once in baseline mode to confirm — if they pass without
+         triage, they're not testing what we think).
 
 Phase E — planner agent                                             (CHECKPOINT 3)
   E1. agents/planner.ts + plannerPrompt + plannerSchema + plannerValidate
