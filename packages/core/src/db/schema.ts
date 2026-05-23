@@ -115,4 +115,15 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       CREATE INDEX IF NOT EXISTS idx_verdicts_run ON verdicts(run_id, id);
     `,
   },
+  {
+    id: 3,
+    name: 'runs_pr_url',
+    sql: `
+      -- The PR URL is set when the run reaches phase=done. Stored on the
+      -- run row (rather than only in the event payload) so that
+      -- agent-loop inspect/list can show it without re-reading the event log.
+      -- Nullable: pre-existing rows and runs that never opened a PR have no URL.
+      ALTER TABLE runs ADD COLUMN pr_url TEXT;
+    `,
+  },
 ];

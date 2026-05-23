@@ -50,6 +50,7 @@ export function formatRunDetail(run: Run): string {
     `tokens      ${run.tokensSpent}    seconds ${run.secondsSpent}    attempt ${run.attemptCount}`,
   );
   if (run.specId !== undefined) lines.push(`specId      ${run.specId}`);
+  if (run.prUrl !== undefined) lines.push(`prUrl       ${run.prUrl}`);
   if (run.failure !== undefined) {
     lines.push(
       `failure     [${run.failure.category}] ${run.failure.message} (in ${run.failure.phase})`,
@@ -103,6 +104,8 @@ function summarizeEventPayload(event: Event): string {
   switch (event.type) {
     case 'triage_succeeded':
       return `specId=${event.specId}`;
+    case 'pr_opened':
+      return `url=${event.url}`;
     case 'spec_rejected':
     case 'plan_rejected':
     case 'abandon':
@@ -114,7 +117,9 @@ function summarizeEventPayload(event: Event): string {
     case 'pr_failed':
       return `[${event.failure.category}] ${event.failure.message}`;
     case 'record_token_usage':
-      return `tokens=${event.tokens}`;
+      return event.usage?.costUsd !== undefined
+        ? `tokens=${event.tokens} costUsd=${event.usage.costUsd.toFixed(4)}`
+        : `tokens=${event.tokens}`;
     case 'record_time_spent':
       return `seconds=${event.seconds}`;
     default:

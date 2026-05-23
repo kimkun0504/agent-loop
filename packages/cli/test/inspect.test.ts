@@ -142,6 +142,52 @@ describe('inspect command', () => {
     expect(o.indexOf('start_triage')).toBeLessThan(o.indexOf('triage_succeeded'));
   });
 
+  it('shows prUrl in the run header when present', async () => {
+    const store = openDb(join(home, 'runs.db'));
+    store.insertRun({
+      id: RunId('run-with-pr'),
+      taskId: TaskId('task-1'),
+      artifactDir: '/runs/run-with-pr',
+      branch: 'agent/run-with-pr',
+      phase: 'done',
+      version: 8,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 1500,
+      secondsSpent: 30,
+      prUrl: 'https://github.com/x/y/pull/77',
+    });
+    await inspect('run-with-pr');
+    expect(out()).toContain('prUrl       https://github.com/x/y/pull/77');
+  });
+
+  it('shows url= in the event payload summary for pr_opened', async () => {
+    const store = openDb(join(home, 'runs.db'));
+    const runId = RunId('run-evt');
+    store.insertRun({
+      id: runId,
+      taskId: TaskId('task-1'),
+      artifactDir: '/runs/run-evt',
+      branch: 'agent/run-evt',
+      phase: 'opening_pr',
+      version: 6,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    });
+    applyEvent(
+      store,
+      runId,
+      { type: 'pr_opened', url: 'https://github.com/x/y/pull/123' },
+      NOW,
+    );
+    await inspect('run-evt');
+    expect(out()).toContain('url=https://github.com/x/y/pull/123');
+  });
+
   it('handles a run with no spec gracefully (omits the spec section)', async () => {
     const store = openDb(join(home, 'runs.db'));
     store.insertRun({

@@ -72,11 +72,11 @@ export class Store {
         `INSERT INTO runs
           (id, task_id, artifact_dir, branch, phase, spec_id, version,
            created_at, updated_at, attempt_count, tokens_spent, seconds_spent,
-           failure_json, abandoned_reason)
+           failure_json, abandoned_reason, pr_url)
          VALUES
           (@id, @task_id, @artifact_dir, @branch, @phase, @spec_id, @version,
            @created_at, @updated_at, @attempt_count, @tokens_spent, @seconds_spent,
-           @failure_json, @abandoned_reason)`,
+           @failure_json, @abandoned_reason, @pr_url)`,
       ),
       updateRunByVersion: db.prepare(
         `UPDATE runs SET
@@ -92,7 +92,8 @@ export class Store {
            tokens_spent = @tokens_spent,
            seconds_spent = @seconds_spent,
            failure_json = @failure_json,
-           abandoned_reason = @abandoned_reason
+           abandoned_reason = @abandoned_reason,
+           pr_url = @pr_url
          WHERE id = @id AND version = @expected_version`,
       ),
       listAllRuns: db.prepare(

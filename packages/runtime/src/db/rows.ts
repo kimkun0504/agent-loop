@@ -44,6 +44,7 @@ export interface RunRow {
   seconds_spent: number;
   failure_json: string | null;
   abandoned_reason: string | null;
+  pr_url: string | null;
 }
 
 export function rowToRun(row: RunRow): Run {
@@ -65,6 +66,7 @@ export function rowToRun(row: RunRow): Run {
     run.failure = JSON.parse(row.failure_json) as Failure;
   }
   if (row.abandoned_reason !== null) run.abandonedReason = row.abandoned_reason;
+  if (row.pr_url !== null) run.prUrl = row.pr_url;
   return run;
 }
 
@@ -84,6 +86,7 @@ export function runToParams(run: Run): RunRow {
     seconds_spent: run.secondsSpent,
     failure_json: run.failure ? JSON.stringify(run.failure) : null,
     abandoned_reason: run.abandonedReason ?? null,
+    pr_url: run.prUrl ?? null,
   };
 }
 

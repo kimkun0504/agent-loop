@@ -134,6 +134,8 @@ export interface Run {
   secondsSpent: number;
   failure?: Failure;
   abandonedReason?: string;
+  /** Set once the PR is opened (phase `done`). Persisted in the runs table. */
+  prUrl?: string;
 }
 
 // --- Spec ------------------------------------------------------------------

@@ -105,4 +105,16 @@ describe('applyMigrations', () => {
         .run(),
     ).toThrow(/FOREIGN KEY/i);
   });
+
+  it('runs.pr_url column exists and is nullable after migration #3', () => {
+    const db = freshDb();
+    applyMigrations(db);
+    const cols = db.prepare("PRAGMA table_info(runs)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const prUrl = cols.find((c) => c.name === 'pr_url');
+    expect(prUrl).toBeDefined();
+    expect(prUrl?.notnull).toBe(0); // nullable
+  });
 });

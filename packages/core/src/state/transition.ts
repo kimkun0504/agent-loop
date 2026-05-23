@@ -39,7 +39,7 @@ export type Event =
   | { type: 'execution_failed'; failure: Omit<Failure, 'phase'> }
   | { type: 'verification_succeeded' }
   | { type: 'verification_failed'; failure: Omit<Failure, 'phase'> }
-  | { type: 'pr_opened' }
+  | { type: 'pr_opened'; url: string }
   | { type: 'pr_failed'; failure: Omit<Failure, 'phase'> }
   | { type: 'abandon'; reason: string }
   | {
@@ -215,6 +215,9 @@ export function transition(run: Run, event: Event, now: string): Run {
 
     case 'verification_failed':
       return { ...base, failure: { ...event.failure, phase: 'verifying' } };
+
+    case 'pr_opened':
+      return { ...base, prUrl: event.url };
 
     case 'pr_failed':
       return { ...base, failure: { ...event.failure, phase: 'opening_pr' } };

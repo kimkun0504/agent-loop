@@ -264,7 +264,7 @@ async function tickOpeningPr(deps: Deps, run: Run): Promise<Run> {
     return applyEvent(
       deps.store,
       run.id,
-      { type: 'pr_opened' },
+      { type: 'pr_opened', url: result.url },
       deps.now(),
     );
   }

@@ -527,6 +527,28 @@ describe('tick: opening_pr phase', () => {
     });
     const after = await tick(makeDeps(store), run);
     expect(after.phase).toBe('done');
+    expect(after.prUrl).toBe('https://github.com/x/y/pull/1');
+  });
+
+  it('persists the PR URL on the pr_opened event payload', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'opening_pr');
+    store.insertVerdict({
+      runId: run.id,
+      pass: true,
+      testResults: [],
+      semanticCheck: { matches: true, reasoning: 'ok' },
+      createdAt: NOW,
+    });
+    await tick(makeDeps(store, {
+      prOpener: stubPrOpener({ ok: true, url: 'https://github.com/o/r/pull/99' }),
+    }), run);
+    const events = store.listEvents(run.id);
+    const prEvent = events.find((e) => e.event.type === 'pr_opened');
+    expect(prEvent).toBeDefined();
+    if (prEvent?.event.type === 'pr_opened') {
+      expect(prEvent.event.url).toBe('https://github.com/o/r/pull/99');
+    }
   });
 
   it('applies pr_failed when the opener fails', async () => {

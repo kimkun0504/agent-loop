@@ -43,9 +43,6 @@ import {
   tick,
   isStopRequested,
   type Deps,
-  type PrOpener,
-  type PrOpenInput,
-  type PrOpenResult,
 } from '@agent-loop/runtime';
 import { SPECS, SPEC_NAMES } from '@agent-loop/example-specs';
 import { resolvePaths, ensureAgentLoopDirs } from '../config.js';
@@ -107,16 +104,6 @@ export async function start(opts: StartOptions): Promise<number> {
 
   // --- Wire deps -----------------------------------------------------------
 
-  let prUrl: string | undefined;
-  const ghOpener = new GhPrOpener();
-  const prOpener: PrOpener = {
-    async openPullRequest(input: PrOpenInput): Promise<PrOpenResult> {
-      const result = await ghOpener.openPullRequest(input);
-      if (result.ok) prUrl = result.url;
-      return result;
-    },
-  };
-
   const deps: Deps = {
     store,
     logger,
@@ -127,7 +114,10 @@ export async function start(opts: StartOptions): Promise<number> {
     now,
     executor: new ClaudeCliExecutor(),
     verifier: runExitCodeVerifier,
-    prOpener,
+    // GhPrOpener returns the URL on success; tick.ts threads it into the
+    // pr_opened event payload, and the transition handler sets Run.prUrl.
+    // No closure capture needed — read final.prUrl after the loop.
+    prOpener: new GhPrOpener(),
   };
 
   // --- SIGINT: write abandon event before exiting --------------------------
@@ -197,8 +187,8 @@ export async function start(opts: StartOptions): Promise<number> {
   process.stdout.write('\n' + formatRunDetail(final));
 
   if (final.phase === 'done') {
-    if (prUrl) {
-      process.stdout.write(`PR: ${prUrl}\n`);
+    if (final.prUrl) {
+      process.stdout.write(`PR: ${final.prUrl}\n`);
     } else {
       process.stdout.write('PR: (URL not captured — check `gh pr list`)\n');
     }

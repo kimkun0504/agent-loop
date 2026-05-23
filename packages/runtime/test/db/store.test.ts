@@ -80,6 +80,7 @@ describe('Store: runs', () => {
         artifactPath: '/runs/run-1/exec.log',
       },
       abandonedReason: 'user pressed STOP',
+      prUrl: 'https://github.com/x/y/pull/9',
     });
     store.insertRun(run);
     expect(store.getRun(run.id)).toEqual(run);
@@ -92,6 +93,13 @@ describe('Store: runs', () => {
     expect('specId' in back).toBe(false);
     expect('failure' in back).toBe(false);
     expect('abandonedReason' in back).toBe(false);
+    expect('prUrl' in back).toBe(false);
+  });
+
+  it('round-trips prUrl independently of other fields', () => {
+    const run = sampleRun({ prUrl: 'https://example.test/pull/42' });
+    store.insertRun(run);
+    expect(store.getRun(run.id)?.prUrl).toBe('https://example.test/pull/42');
   });
 
   it('updateRunByVersion succeeds when versions match', () => {

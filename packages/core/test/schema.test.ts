@@ -92,3 +92,19 @@ describe('migration 2: plans_and_verdicts', () => {
     expect(m?.sql).toMatch(/pass\s+INTEGER\s+NOT NULL/);
   });
 });
+
+describe('migration 3: runs_pr_url', () => {
+  const m = MIGRATIONS.find((x) => x.id === 3);
+
+  it('exists', () => {
+    expect(m).toBeDefined();
+  });
+
+  it('is named "runs_pr_url"', () => {
+    expect(m?.name).toBe('runs_pr_url');
+  });
+
+  it('adds a pr_url column to runs (nullable, no default)', () => {
+    expect(m?.sql).toMatch(/ALTER TABLE runs ADD COLUMN pr_url TEXT/);
+  });
+});

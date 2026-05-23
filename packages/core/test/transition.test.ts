@@ -35,7 +35,7 @@ function runInPhase(phase: Phase): Run {
     { type: 'plan_approved' },
     { type: 'execution_succeeded' },
     { type: 'verification_succeeded' },
-    { type: 'pr_opened' },
+    { type: 'pr_opened', url: 'https://example.test/pull/1' },
   ];
   for (const event of path) {
     r = transition(r, event, NOW);
@@ -73,7 +73,7 @@ describe('happy path', () => {
     phases.push(r.phase);
     r = transition(r, { type: 'verification_succeeded' }, NOW);
     phases.push(r.phase);
-    r = transition(r, { type: 'pr_opened' }, NOW);
+    r = transition(r, { type: 'pr_opened', url: 'https://github.com/x/y/pull/1' }, NOW);
     phases.push(r.phase);
 
     expect(phases).toEqual([
@@ -94,6 +94,17 @@ describe('happy path', () => {
     let r = transition(freshRun(), { type: 'start_triage' }, NOW);
     r = transition(r, { type: 'triage_succeeded', specId: SpecId('spec-42') }, NOW);
     expect(r.specId).toBe('spec-42');
+  });
+
+  it('records prUrl when pr_opened is applied', () => {
+    const r = runInPhase('opening_pr');
+    const next = transition(
+      r,
+      { type: 'pr_opened', url: 'https://github.com/foo/bar/pull/42' },
+      NOW,
+    );
+    expect(next.phase).toBe('done');
+    expect(next.prUrl).toBe('https://github.com/foo/bar/pull/42');
   });
 
   it('updates updatedAt and increments version on every transition', () => {
@@ -135,7 +146,7 @@ describe('invalid transitions', () => {
   it('error carries the from-phase and event-type', () => {
     const r = freshRun();
     try {
-      transition(r, { type: 'pr_opened' }, NOW);
+      transition(r, { type: 'pr_opened', url: 'https://x/pull/1' }, NOW);
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(InvalidTransitionError);
