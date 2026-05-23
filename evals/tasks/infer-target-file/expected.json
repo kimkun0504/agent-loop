@@ -1,0 +1,9 @@
+{
+  "acceptanceCriteria": [
+    "string values in the response are trimmed",
+    "non-string values pass through unchanged",
+    "nested objects are NOT recursively trimmed (the fix is shallow for this version)",
+    "all tests pass"
+  ],
+  "testCommands": ["npm test"]
+}

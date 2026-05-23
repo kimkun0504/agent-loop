@@ -17,8 +17,14 @@
  */
 
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { openDb } from '@agent-loop/runtime';
+import {
+  openDb,
+  loadDotenvFile,
+  createAnthropicClient,
+  type AnthropicClient,
+} from '@agent-loop/runtime';
 import { discoverTasks } from '../eval/discover.js';
 import { runOneTask } from '../eval/drive.js';
 import { writeResults } from '../eval/report.js';
@@ -31,6 +37,8 @@ export interface EvalOptions {
   task?: string;          // run only one task by name
   outputDir?: string;     // override the default results location
   verbose?: boolean;
+  /** Phase D: drive runs through real triage (requires ANTHROPIC_API_KEY). */
+  withTriage?: boolean;
 }
 
 export async function evalCmd(opts: EvalOptions): Promise<number> {
@@ -78,8 +86,22 @@ export async function evalCmd(opts: EvalOptions): Promise<number> {
   const dbPath = join(resultsDir, EVAL_DB_FILE);
   const store = openDb(dbPath);
 
+  let anthropicClient: AnthropicClient | undefined;
+  if (opts.withTriage) {
+    const dotenvPath = join(homedir(), '.agent-loop', '.env');
+    const env = loadDotenvFile(dotenvPath);
+    const key = env['ANTHROPIC_API_KEY'];
+    if (!key) {
+      process.stderr.write(
+        `eval: --with-triage requires ANTHROPIC_API_KEY in ${dotenvPath}\n`,
+      );
+      return 2;
+    }
+    anthropicClient = createAnthropicClient({ apiKey: key });
+  }
+
   process.stdout.write(
-    `eval: ${selected.length} task(s), results -> ${resultsDir}\n`,
+    `eval: ${selected.length} task(s) [${opts.withTriage ? 'with-triage' : 'baseline'}], results -> ${resultsDir}\n`,
   );
 
   const results: EvalTaskResult[] = [];
@@ -94,6 +116,8 @@ export async function evalCmd(opts: EvalOptions): Promise<number> {
         workspaceDir: resultsDir,
         artifactsDir: taskArtifactsDir,
         verbose: opts.verbose === true,
+        ...(opts.withTriage ? { withTriage: true } : {}),
+        ...(anthropicClient ? { anthropicClient } : {}),
       });
       const dur = ((Date.now() - start) / 1000).toFixed(1);
       const outcome = result.passed ? 'PASS' : 'FAIL';

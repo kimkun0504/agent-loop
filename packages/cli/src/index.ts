@@ -66,12 +66,14 @@ async function main(argv: string[]): Promise<number> {
     .option('--task <name>', 'Run only the named task')
     .option('--output-dir <path>', 'Write results under this dir instead of evals/results/<ts>/')
     .option('--verbose', 'Stream per-tick log output to stdout', false)
+    .option('--with-triage', 'Drive runs through real triage (Phase D)', false)
     .action(async (opts) => {
       process.exit(
         await evalCmd({
           task: opts.task,
           outputDir: opts.outputDir,
           verbose: Boolean(opts.verbose),
+          withTriage: Boolean(opts.withTriage),
         }),
       );
     });

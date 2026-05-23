@@ -20,6 +20,7 @@ import {
   createRun,
   isTerminal,
   type Spec,
+  type Task,
 } from '@agent-loop/core';
 import {
   ClaudeCliExecutor,
@@ -27,6 +28,8 @@ import {
   tick,
   isStopRequested,
   writeMetaArtifact,
+  applyEvent,
+  type AnthropicClient,
   type Deps,
   type Store,
 } from '@agent-loop/runtime';
@@ -46,6 +49,14 @@ export interface RunOneOptions {
   artifactsDir: string;
   /** Whether to print interim log output (--verbose). Default false. */
   verbose?: boolean;
+  /**
+   * Phase D: when true, drive the run through real triage instead of
+   * hand-rolling a Spec from task.md + expected.json. Requires
+   * anthropicClient.
+   */
+  withTriage?: boolean;
+  /** Required when withTriage is true. */
+  anthropicClient?: AnthropicClient;
 }
 
 export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
@@ -65,17 +76,41 @@ export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
       console: Boolean(opts.verbose),
     });
 
+    if (opts.withTriage && !opts.anthropicClient) {
+      throw new Error('runOneTask: withTriage=true requires an anthropicClient');
+    }
+
+    const taskId = TaskId(`eval:${opts.task.name}`);
     const run = createRun({
       id: runId,
-      taskId: TaskId(`eval:${opts.task.name}`),
+      taskId,
       artifactDir: env.artifactsDir,
       branch: `agent/${runIdStr}`,
       now: now(),
     });
     opts.store.insertRun(run);
 
-    const spec = buildEvalSpec(opts.task, runId, now());
-    driveToExecuting({ store: opts.store, spec, now, logger });
+    if (opts.withTriage) {
+      // Triage mode: insert the Task row, apply start_triage, and let the
+      // tick loop carry the run through tickTriaging + the bridge auto-
+      // advance cases (awaiting_spec_approval, planning, awaiting_plan_approval)
+      // into executing. No hand-rolled spec.
+      const task: Task = {
+        id: taskId,
+        title: opts.task.name,
+        body: opts.task.taskMd,
+        source: 'eval',
+        createdAt: now(),
+      };
+      opts.store.insertTask(task);
+      applyEvent(opts.store, runId, { type: 'start_triage' }, now());
+    } else {
+      // Baseline mode: synthesize a Spec from task.md + expected.json and
+      // drive directly to executing — the same path the Phase A baseline
+      // ran. No Task row needed.
+      const spec = buildEvalSpec(opts.task, runId, now());
+      driveToExecuting({ store: opts.store, spec, now, logger });
+    }
 
     const deps: Deps = {
       store: opts.store,
@@ -88,6 +123,7 @@ export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
       executor: new ClaudeCliExecutor(),
       verifier: runExitCodeVerifier,
       prOpener: new NoopPrOpener(),
+      ...(opts.anthropicClient !== undefined ? { anthropicClient: opts.anthropicClient } : {}),
     };
 
     // Drive ticks until terminal.

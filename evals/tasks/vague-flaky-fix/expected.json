@@ -1,0 +1,8 @@
+{
+  "acceptanceCriteria": [
+    "LRU cache evicts the LEAST-recently-used item when capacity is exceeded",
+    "get() promotes the entry to most-recently-used",
+    "all tests pass"
+  ],
+  "testCommands": ["npm test"]
+}

@@ -1,0 +1,1 @@
+API responses are coming back with extra whitespace in string fields — leading or trailing spaces in user-supplied data. Please normalize string values in the response so they're trimmed before they leave us. Numbers, booleans, nulls, and nested objects should pass through unchanged.
