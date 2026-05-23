@@ -56,12 +56,6 @@ describe('cli scaffold', () => {
     expect(r.stderr).toContain('not yet implemented');
   });
 
-  it('inspect stub responds (implemented in CLI step 6)', async () => {
-    const r = await run(['inspect', 'run-x']);
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain('not yet implemented');
-  });
-
   it('unknown subcommand exits non-zero', async () => {
     const r = await run(['nope']);
     expect(r.exitCode).not.toBe(0);

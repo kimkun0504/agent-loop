@@ -5,7 +5,8 @@
  * No emoji, no boxes, no ANSI: lines should be greppable and copy-pasteable.
  */
 
-import type { Run } from '@agent-loop/core';
+import type { Run, Spec, Verdict, Event } from '@agent-loop/core';
+import type { EventRecord } from '@agent-loop/runtime';
 
 const COL_RUN = 24;
 const COL_PHASE = 24;
@@ -58,4 +59,65 @@ export function formatRunDetail(run: Run): string {
     lines.push(`abandoned   ${run.abandonedReason}`);
   }
   return lines.join('\n') + '\n';
+}
+
+export function formatSpec(spec: Spec): string {
+  const lines: string[] = [];
+  lines.push('--- Spec --------------------------------------------------');
+  lines.push(`id          ${spec.id}`);
+  lines.push(`title       ${spec.title}`);
+  lines.push('description');
+  for (const l of spec.description.split('\n')) lines.push(`  ${l}`);
+  lines.push(`fileScope   ${spec.fileScope.join(', ')}`);
+  lines.push('acceptanceCriteria');
+  for (const ac of spec.acceptanceCriteria) lines.push(`  - ${ac}`);
+  lines.push(`testCommands  ${spec.testCommands.join(' && ')}`);
+  lines.push(
+    `budget        maxTokens=${spec.budget.maxTokens} maxSeconds=${spec.budget.maxSeconds} maxAttempts=${spec.budget.maxAttemptsPerPhase}`,
+  );
+  return lines.join('\n') + '\n';
+}
+
+export function formatVerdict(verdict: Verdict, index: number): string {
+  const lines: string[] = [];
+  const verdictNum = index + 1;
+  lines.push(
+    `--- Verdict #${verdictNum} (${verdict.pass ? 'PASS' : 'FAIL'}) at ${verdict.createdAt} ---`,
+  );
+  for (const tr of verdict.testResults) {
+    lines.push(`  ${tr.command} -> exit ${tr.exitCode}, ${tr.durationMs}ms`);
+  }
+  lines.push(
+    `  semanticCheck: matches=${verdict.semanticCheck.matches} (${verdict.semanticCheck.reasoning})`,
+  );
+  return lines.join('\n') + '\n';
+}
+
+export function formatEventLine(rec: EventRecord): string {
+  const summary = summarizeEventPayload(rec.event);
+  const tail = summary ? `  ${summary}` : '';
+  return `[${rec.appliedAt}] v${rec.runVersionAfter}  ${rec.event.type}${tail}`;
+}
+
+function summarizeEventPayload(event: Event): string {
+  switch (event.type) {
+    case 'triage_succeeded':
+      return `specId=${event.specId}`;
+    case 'spec_rejected':
+    case 'plan_rejected':
+    case 'abandon':
+      return `reason=${event.reason}`;
+    case 'triage_failed':
+    case 'planning_failed':
+    case 'execution_failed':
+    case 'verification_failed':
+    case 'pr_failed':
+      return `[${event.failure.category}] ${event.failure.message}`;
+    case 'record_token_usage':
+      return `tokens=${event.tokens}`;
+    case 'record_time_spent':
+      return `seconds=${event.seconds}`;
+    default:
+      return '';
+  }
 }
