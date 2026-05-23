@@ -77,6 +77,29 @@ export {
   type CollectOptions as CollectRepoContextOptions,
 } from './agents/repoContext.js';
 export {
+  TRIAGE_INPUT_SCHEMA,
+  TRIAGE_TOOL_NAME,
+  type TriageProducedSpec,
+  type TriageRejectionReason,
+  type TriageResult,
+} from './agents/triageSchema.js';
+export {
+  TRIAGE_SYSTEM_PROMPT,
+  buildTriageUserPrompt,
+  buildTriageRetryUserPrompt,
+} from './agents/triagePrompt.js';
+export {
+  validateTriageOutput,
+  type ValidatedTriage,
+  type ValidationFailure as TriageValidationFailure,
+} from './agents/triageValidate.js';
+export {
+  runTriage,
+  DEFAULT_TRIAGE_MODEL,
+  type TriageDeps,
+  type TriageInput,
+} from './agents/triage.js';
+export {
   writeExecutorArtifacts,
   writeVerdictArtifact,
   writeMetaArtifact,
