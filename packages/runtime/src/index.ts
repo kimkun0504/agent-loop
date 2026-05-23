@@ -8,7 +8,9 @@ export {
   type VerdictRow,
   type EventRow,
   type EventRecord,
+  type TaskRow,
 } from './db/rows.js';
+export { type TaskSource } from './sources/types.js';
 export { applyEvent, type ApplyEventStore } from './orchestrator/apply.js';
 export { RunNotFoundError, VersionConflictError } from './orchestrator/errors.js';
 export { tick, type Deps, type Verifier } from './orchestrator/tick.js';

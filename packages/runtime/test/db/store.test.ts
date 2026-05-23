@@ -4,6 +4,7 @@ import {
   type Run,
   type Spec,
   type Plan,
+  type Task,
   type Verdict,
   RunId,
   SpecId,
@@ -310,6 +311,93 @@ describe('Store: events', () => {
     expect(() =>
       store.insertEvent(RunId('ghost'), { type: 'start_triage' }, 1, NOW),
     ).toThrow(/FOREIGN KEY/i);
+  });
+});
+
+describe('Store: tasks', () => {
+  let store: Store;
+  beforeEach(() => {
+    store = newStore();
+  });
+
+  it('round-trips a minimal Task', () => {
+    const task: Task = {
+      id: TaskId('local:hardcoded'),
+      title: 'hardcoded task',
+      body: 'body',
+      source: 'local',
+      createdAt: NOW,
+    };
+    store.insertTask(task);
+    expect(store.getTask(task.id)).toEqual(task);
+  });
+
+  it('returns undefined for a missing task', () => {
+    expect(store.getTask(TaskId('missing'))).toBeUndefined();
+  });
+
+  it('round-trips a Task with url and sourceMetadata populated', () => {
+    const task: Task = {
+      id: TaskId('github:foo/bar#42'),
+      title: 'an issue',
+      body: 'issue body',
+      source: 'github:foo/bar',
+      createdAt: NOW,
+      url: 'https://github.com/foo/bar/issues/42',
+      sourceMetadata: {
+        labels: ['bug', 'agent-ready'],
+        assignees: ['alice'],
+      },
+    };
+    store.insertTask(task);
+    expect(store.getTask(task.id)).toEqual(task);
+  });
+
+  it('omits url and sourceMetadata when absent (no undefined leakage)', () => {
+    const task: Task = {
+      id: TaskId('x'),
+      title: 't',
+      body: 'b',
+      source: 'local',
+      createdAt: NOW,
+    };
+    store.insertTask(task);
+    const back = store.getTask(task.id)!;
+    expect('url' in back).toBe(false);
+    expect('sourceMetadata' in back).toBe(false);
+  });
+
+  it('listTasksBySource filters by source and orders by created_at', () => {
+    store.insertTask({
+      id: TaskId('github:a/b#1'),
+      title: 't1', body: 'b1', source: 'github:a/b',
+      createdAt: '2026-05-23T10:00:00.000Z',
+    });
+    store.insertTask({
+      id: TaskId('local:x'),
+      title: 't2', body: 'b2', source: 'local',
+      createdAt: '2026-05-23T09:00:00.000Z',
+    });
+    store.insertTask({
+      id: TaskId('github:a/b#2'),
+      title: 't3', body: 'b3', source: 'github:a/b',
+      createdAt: '2026-05-23T11:00:00.000Z',
+    });
+    const ghTasks = store.listTasksBySource('github:a/b');
+    expect(ghTasks.map((t) => t.id)).toEqual([
+      'github:a/b#1',
+      'github:a/b#2',
+    ]);
+  });
+
+  it('enforces PRIMARY KEY on id', () => {
+    const task: Task = {
+      id: TaskId('dup'),
+      title: 't', body: 'b', source: 'local',
+      createdAt: NOW,
+    };
+    store.insertTask(task);
+    expect(() => store.insertTask(task)).toThrow(/UNIQUE|PRIMARY KEY/i);
   });
 });
 

@@ -117,4 +117,30 @@ describe('applyMigrations', () => {
     expect(prUrl).toBeDefined();
     expect(prUrl?.notnull).toBe(0); // nullable
   });
+
+  it('tasks table exists with expected columns after migration #4', () => {
+    const db = freshDb();
+    applyMigrations(db);
+    expect(tableNames(db)).toContain('tasks');
+    const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+      name: string;
+      notnull: number;
+      pk: number;
+    }>;
+    const byName = (n: string): typeof cols[number] | undefined =>
+      cols.find((c) => c.name === n);
+    expect(byName('id')?.pk).toBe(1);
+    expect(byName('title')?.notnull).toBe(1);
+    expect(byName('body')?.notnull).toBe(1);
+    expect(byName('source')?.notnull).toBe(1);
+    expect(byName('created_at')?.notnull).toBe(1);
+    expect(byName('url')?.notnull).toBe(0);
+    expect(byName('source_metadata_json')?.notnull).toBe(0);
+  });
+
+  it('idx_tasks_source index exists after migration #4', () => {
+    const db = freshDb();
+    applyMigrations(db);
+    expect(indexNames(db)).toContain('idx_tasks_source');
+  });
 });

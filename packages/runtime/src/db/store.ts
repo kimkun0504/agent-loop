@@ -24,6 +24,8 @@ import {
   type Verdict,
   type Phase,
   type Event,
+  type Task,
+  type TaskId,
 } from '@agent-loop/core';
 import {
   rowToRun,
@@ -36,12 +38,15 @@ import {
   verdictToParams,
   rowToEventRecord,
   eventToParams,
+  rowToTask,
+  taskToParams,
   type RunRow,
   type SpecRow,
   type PlanRow,
   type VerdictRow,
   type EventRow,
   type EventRecord,
+  type TaskRow,
 } from './rows.js';
 
 export class Store {
@@ -62,6 +67,9 @@ export class Store {
     insertVerdict: Database.Statement;
     listEvents: Database.Statement;
     insertEvent: Database.Statement;
+    getTask: Database.Statement;
+    insertTask: Database.Statement;
+    listTasksBySource: Database.Statement;
   };
 
   constructor(db: Database.Database) {
@@ -135,6 +143,16 @@ export class Store {
           (run_id, event_type, payload, applied_at, run_version_after)
          VALUES
           (@run_id, @event_type, @payload, @applied_at, @run_version_after)`,
+      ),
+      getTask: db.prepare('SELECT * FROM tasks WHERE id = ?'),
+      insertTask: db.prepare(
+        `INSERT INTO tasks
+          (id, title, body, source, created_at, url, source_metadata_json)
+         VALUES
+          (@id, @title, @body, @source, @created_at, @url, @source_metadata_json)`,
+      ),
+      listTasksBySource: db.prepare(
+        'SELECT * FROM tasks WHERE source = ? ORDER BY created_at',
       ),
     };
   }
@@ -243,6 +261,22 @@ export class Store {
     this.stmts.insertEvent.run(
       eventToParams(runId, event, runVersionAfter, appliedAt),
     );
+  }
+
+  // --- Tasks ---------------------------------------------------------------
+
+  getTask(id: TaskId): Task | undefined {
+    const row = this.stmts.getTask.get(id) as TaskRow | undefined;
+    return row ? rowToTask(row) : undefined;
+  }
+
+  insertTask(task: Task): void {
+    this.stmts.insertTask.run(taskToParams(task));
+  }
+
+  listTasksBySource(source: string): Task[] {
+    const rows = this.stmts.listTasksBySource.all(source) as TaskRow[];
+    return rows.map(rowToTask);
   }
 
   // --- Transaction control -------------------------------------------------

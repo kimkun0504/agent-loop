@@ -22,6 +22,7 @@ import {
   type TestResult,
   type Phase,
   type Event,
+  type Task,
   RunId,
   SpecId,
   TaskId,
@@ -269,5 +270,47 @@ export function eventToParams(
     payload: JSON.stringify(event),
     applied_at: appliedAt,
     run_version_after: runVersionAfter,
+  };
+}
+
+// --- Tasks -----------------------------------------------------------------
+
+export interface TaskRow {
+  id: string;
+  title: string;
+  body: string;
+  source: string;
+  created_at: string;
+  url: string | null;
+  source_metadata_json: string | null;
+}
+
+export function rowToTask(row: TaskRow): Task {
+  const task: Task = {
+    id: TaskId(row.id),
+    title: row.title,
+    body: row.body,
+    source: row.source,
+    createdAt: row.created_at,
+  };
+  if (row.url !== null) task.url = row.url;
+  if (row.source_metadata_json !== null) {
+    task.sourceMetadata = JSON.parse(row.source_metadata_json) as Record<string, unknown>;
+  }
+  return task;
+}
+
+export function taskToParams(task: Task): TaskRow {
+  return {
+    id: task.id,
+    title: task.title,
+    body: task.body,
+    source: task.source,
+    created_at: task.createdAt,
+    url: task.url ?? null,
+    source_metadata_json:
+      task.sourceMetadata !== undefined
+        ? JSON.stringify(task.sourceMetadata)
+        : null,
   };
 }
