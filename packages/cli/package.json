@@ -19,6 +19,7 @@
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "better-sqlite3": "^11.3.0",
     "execa": "^9.0.0",
     "tsx": "^4.7.0",
     "vitest": "^1.6.1"
