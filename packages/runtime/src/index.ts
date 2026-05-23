@@ -18,3 +18,8 @@ export {
   type WorktreeEntry,
 } from './git/worktree.js';
 export { WorktreeAlreadyExistsError } from './git/errors.js';
+export {
+  runCommand,
+  type RunCommandOptions,
+  type RunCommandResult,
+} from './proc/run.js';
