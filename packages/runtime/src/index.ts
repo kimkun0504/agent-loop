@@ -23,3 +23,8 @@ export {
   type RunCommandOptions,
   type RunCommandResult,
 } from './proc/run.js';
+export {
+  runExitCodeVerifier,
+  summarizeOutput,
+  type VerifyOptions,
+} from './verifier/exitCode.js';
