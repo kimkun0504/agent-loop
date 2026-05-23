@@ -46,6 +46,7 @@ const GIT_ID = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com'];
 let tmpRoot: string;
 let repoDir: string;
 let workspaceDir: string;
+let worktreesDir: string;
 let artifactsDir: string;
 let runCounter = 0;
 
@@ -55,8 +56,10 @@ beforeAll(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'agent-loop-tick-'));
   repoDir = join(tmpRoot, 'repo');
   workspaceDir = join(tmpRoot, 'workspace');
+  worktreesDir = join(tmpRoot, 'worktrees');
   artifactsDir = join(tmpRoot, 'artifacts');
   mkdirSync(workspaceDir, { recursive: true });
+  mkdirSync(worktreesDir, { recursive: true });
   mkdirSync(artifactsDir, { recursive: true });
 
   await execa('git', ['init', '-b', 'main', repoDir]);
@@ -123,6 +126,28 @@ const stubExecutor = (
   execute: async () => result,
 });
 
+/**
+ * Stub executor that writes a file into the worktree (so the post-executor
+ * commit has something to stage) and returns ok=true. Mirrors the realistic
+ * happy path — the real ClaudeCliExecutor leaves edited files behind.
+ */
+const stubExecutorThatEditsFile = (
+  filename: string,
+  content: string,
+): Executor => ({
+  execute: async (input) => {
+    writeFileSync(join(input.worktreePath, filename), content);
+    return {
+      ok: true,
+      exitCode: 0,
+      durationMs: 1,
+      outputLog: '',
+      timedOut: false,
+      spawnFailed: false,
+    };
+  },
+});
+
 const stubVerifier =
   (verdict: Omit<Verdict, 'runId'>): Verifier =>
   async (run) => ({ ...verdict, runId: run.id });
@@ -139,17 +164,13 @@ function makeDeps(
     store,
     logger: silentLogger,
     workspaceDir,
+    worktreesDir,
     artifactsDir,
     repoDir,
     now: () => NOW,
-    executor: stubExecutor({
-      ok: true,
-      exitCode: 0,
-      durationMs: 1,
-      outputLog: '',
-      timedOut: false,
-      spawnFailed: false,
-    }),
+    // Default success path: write a file in the worktree so the
+    // post-executor commit has something to stage.
+    executor: stubExecutorThatEditsFile('NOTES.md', 'agent was here\n'),
     verifier: stubVerifier({
       pass: true,
       testResults: [],
@@ -235,7 +256,7 @@ describe('tick: executing phase', () => {
     expect(after.phase).toBe('verifying');
     expect(after.version).toBe(1);
 
-    const worktreePath = join(workspaceDir, run.id, 'worktree');
+    const worktreePath = join(worktreesDir, run.id, 'worktree');
     expect(existsSync(worktreePath)).toBe(true);
     expect(existsSync(join(worktreePath, 'README.md'))).toBe(true);
   });
@@ -322,12 +343,47 @@ describe('tick: executing phase', () => {
     const { addWorktree } = await import('../../src/git/worktree.js');
     const store = freshStore();
     const { run } = seedRunAndSpec(store, 'executing');
-    const wtPath = join(workspaceDir, run.id, 'worktree');
+    const wtPath = join(worktreesDir, run.id, 'worktree');
     await addWorktree(repoDir, run.branch, wtPath);
 
     const after = await tick(makeDeps(store), run);
     expect(after.phase).toBe('verifying');
     expect(existsSync(wtPath)).toBe(true);
+  });
+
+  it('fails with execution_error when executor returns ok=true but produces no file changes', async () => {
+    // The executor "succeeded" but didn't edit anything. The commit step
+    // should fail loudly — an empty PR is not a success.
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    const deps = makeDeps(store, {
+      executor: stubExecutor({
+        ok: true,
+        exitCode: 0,
+        durationMs: 1,
+        outputLog: '',
+        timedOut: false,
+        spawnFailed: false,
+      }),
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('execution_error');
+    expect(after.failure?.message).toMatch(/no file changes|nothing to commit/);
+  });
+
+  it('commits agent changes after a successful executor run', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    await tick(makeDeps(store), run);
+
+    // The worktree should now have a commit beyond the fixture's init.
+    const wtPath = join(worktreesDir, run.id, 'worktree');
+    const log = await execa('git', ['log', '--oneline'], { cwd: wtPath });
+    const lines = log.stdout.trim().split('\n');
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    // The agent-loop commit message contains the spec title.
+    expect(log.stdout).toContain('title');
   });
 });
 

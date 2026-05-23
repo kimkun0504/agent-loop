@@ -42,6 +42,7 @@ const GIT_ID = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com'];
 let tmpRoot: string;
 let repoDir: string;
 let workspaceDir: string;
+let worktreesDir: string;
 let artifactsDir: string;
 let counter = 0;
 
@@ -51,8 +52,10 @@ beforeAll(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'agent-loop-loop-'));
   repoDir = join(tmpRoot, 'repo');
   workspaceDir = join(tmpRoot, 'workspace');
+  worktreesDir = join(tmpRoot, 'worktrees');
   artifactsDir = join(tmpRoot, 'artifacts');
   mkdirSync(workspaceDir, { recursive: true });
+  mkdirSync(worktreesDir, { recursive: true });
   mkdirSync(artifactsDir, { recursive: true });
   await execa('git', ['init', '-b', 'main', repoDir]);
   writeFileSync(join(repoDir, 'README.md'), '# fixture\n');
@@ -103,14 +106,22 @@ function seedExecutingRun(store: Store): Run {
 }
 
 const okExecutor: Executor = {
-  execute: async () => ({
-    ok: true,
-    exitCode: 0,
-    durationMs: 1,
-    outputLog: '',
-    timedOut: false,
-    spawnFailed: false,
-  }),
+  // Side-effect: write a file in the worktree so the post-executor commit
+  // step has something to stage.
+  execute: async (input) => {
+    writeFileSync(
+      join(input.worktreePath, 'NOTES.md'),
+      'agent was here\n',
+    );
+    return {
+      ok: true,
+      exitCode: 0,
+      durationMs: 1,
+      outputLog: '',
+      timedOut: false,
+      spawnFailed: false,
+    };
+  },
 };
 
 const okVerifier: Verifier = async (run) => ({
@@ -133,6 +144,7 @@ function makeDeps(store: Store, ws = workspaceDir): Deps {
     store,
     logger: silentLogger,
     workspaceDir: ws,
+    worktreesDir,
     artifactsDir,
     repoDir,
     now: () => NOW,
