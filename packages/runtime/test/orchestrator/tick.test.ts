@@ -19,6 +19,7 @@ import {
   writeFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -429,6 +430,36 @@ describe('tick: executing phase', () => {
     }
   });
 
+  it('writes executor.log and executor.json under the artifact dir', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    await tick(makeDeps(store), run);
+    const dir = join(artifactsDir, run.id);
+    expect(existsSync(join(dir, 'executor.log'))).toBe(true);
+    expect(existsSync(join(dir, 'executor.json'))).toBe(true);
+  });
+
+  it('writes executor artifacts even on a failed executor run (post-mortem signal)', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    const deps = makeDeps(store, {
+      executor: stubExecutor({
+        ok: false,
+        exitCode: 5,
+        durationMs: 100,
+        outputLog: 'agent printed this before dying',
+        timedOut: false,
+        spawnFailed: false,
+      }),
+    });
+    await tick(deps, run);
+    const dir = join(artifactsDir, run.id);
+    expect(existsSync(join(dir, 'executor.log'))).toBe(true);
+    // The log captures the agent's output even though execution failed.
+    const log = readFileSync(join(dir, 'executor.log'), 'utf8');
+    expect(log).toContain('agent printed this before dying');
+  });
+
   it('records usage even when the executor failed (failures still cost tokens)', async () => {
     const store = freshStore();
     const { run } = seedRunAndSpec(store, 'executing');
@@ -462,6 +493,15 @@ describe('tick: verifying phase', () => {
     const verdicts = store.listVerdicts(run.id);
     expect(verdicts.length).toBe(1);
     expect(verdicts[0]?.pass).toBe(true);
+  });
+
+  it('writes verdict-001.json and verdict-001.log under the artifact dir', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying');
+    await tick(makeDeps(store), run);
+    const dir = join(artifactsDir, run.id);
+    expect(existsSync(join(dir, 'verdict-001.json'))).toBe(true);
+    expect(existsSync(join(dir, 'verdict-001.log'))).toBe(true);
   });
 
   it('applies verification_failed with category=verification_failed on a failing verdict', async () => {

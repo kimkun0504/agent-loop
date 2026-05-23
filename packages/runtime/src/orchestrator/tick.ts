@@ -40,6 +40,10 @@ import { addWorktree } from '../git/worktree.js';
 import { isStopRequested } from '../fs/stop.js';
 import { runCommand } from '../proc/run.js';
 import { sumTokens } from '../executor/claudeOutput.js';
+import {
+  writeExecutorArtifacts,
+  writeVerdictArtifact,
+} from '../artifacts/write.js';
 import { applyEvent } from './apply.js';
 
 export type Verifier = (
@@ -117,7 +121,8 @@ async function tickExecuting(deps: Deps, run: Run): Promise<Run> {
   }
 
   // Lazy artifacts dir.
-  mkdirSync(join(deps.artifactsDir, run.id), { recursive: true });
+  const runArtifactDir = join(deps.artifactsDir, run.id);
+  mkdirSync(runArtifactDir, { recursive: true });
 
   const result = await deps.executor.execute({
     run,
@@ -125,6 +130,10 @@ async function tickExecuting(deps: Deps, run: Run): Promise<Run> {
     worktreePath,
     logger: deps.logger,
   });
+
+  // Persist the agent's full transcript to disk. Done regardless of ok —
+  // failed runs are the ones we most need to post-mortem.
+  writeExecutorArtifacts(runArtifactDir, result);
 
   // Record token usage and wall-clock against the Run, regardless of ok —
   // a failed agent run still consumed tokens, and we want those reflected
@@ -213,6 +222,10 @@ async function tickVerifying(deps: Deps, run: Run): Promise<Run> {
   });
 
   deps.store.insertVerdict(verdict);
+  // Persist the verdict alongside the executor transcript. Index = current
+  // count after insert (1-based) so the first verdict is verdict-001.
+  const verdictIndex = deps.store.listVerdicts(run.id).length;
+  writeVerdictArtifact(join(deps.artifactsDir, run.id), verdict, verdictIndex);
 
   if (verdict.pass) {
     return applyEvent(

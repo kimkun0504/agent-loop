@@ -42,6 +42,7 @@ import {
   GhPrOpener,
   tick,
   isStopRequested,
+  writeMetaArtifact,
   type Deps,
 } from '@agent-loop/runtime';
 import { SPECS, SPEC_NAMES } from '@agent-loop/example-specs';
@@ -184,6 +185,19 @@ export async function start(opts: StartOptions): Promise<number> {
   // --- Report outcome ------------------------------------------------------
 
   const final = store.getRun(runId)!;
+
+  // Write meta.json: the terminal-state snapshot. Goes to disk before we
+  // print to the terminal so users with `--quiet` later can still find
+  // the answer in artifacts.
+  const finalSpec = store.getSpecByRun(runId);
+  const verdicts = store.listVerdicts(runId);
+  writeMetaArtifact(
+    join(paths.artifactsDir, runId),
+    final,
+    finalSpec,
+    verdicts[verdicts.length - 1],
+  );
+
   process.stdout.write('\n' + formatRunDetail(final));
 
   if (final.phase === 'done') {
