@@ -1,0 +1,9 @@
+{
+  "name": "eval-add-clamp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

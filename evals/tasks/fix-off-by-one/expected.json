@@ -1,0 +1,10 @@
+{
+  "acceptanceCriteria": [
+    "lastN([1,2,3,4], 2) deepEquals [3,4]",
+    "lastN([1,2,3], 0) deepEquals []",
+    "lastN([1,2,3], 99) deepEquals [1,2,3]",
+    "the existing test was updated to match the corrected behavior (not deleted)",
+    "all tests pass via npm test"
+  ],
+  "testCommands": ["npm test"]
+}

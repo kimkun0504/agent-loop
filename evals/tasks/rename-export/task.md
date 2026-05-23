@@ -1,0 +1,1 @@
+Rename `parseDate` to `parseIsoDate` everywhere it's referenced. It's defined in `src/date.js` and used from at least `src/format.js` and `test/format.test.js`. The function only handles ISO 8601 input and the old name is misleading new contributors.

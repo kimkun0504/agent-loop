@@ -1,0 +1,10 @@
+{
+  "acceptanceCriteria": [
+    "parseIsoDate exported from src/date.js",
+    "src/format.js imports and uses parseIsoDate",
+    "test/format.test.js imports and uses parseIsoDate",
+    "no occurrence of the old name parseDate (as a whole word) anywhere under src/ or test/",
+    "npm test still passes"
+  ],
+  "testCommands": ["npm test", "! grep -rE 'parseDate\\b' src/ test/"]
+}

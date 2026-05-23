@@ -1,0 +1,12 @@
+{
+  "acceptanceCriteria": [
+    "new tests cover negative numbers (e.g., parseInt32('-42') === -42)",
+    "new tests cover whitespace (e.g., parseInt32('  42  ') === 42)",
+    "new tests cover INT32 boundaries: parseInt32('-2147483648') and parseInt32('2147483647') succeed",
+    "new tests assert that overflow throws RangeError (e.g., parseInt32('2147483648'))",
+    "new tests assert that non-numeric input throws (e.g., parseInt32('abc'))",
+    "src/parse-int32.js has NOT been modified",
+    "all tests pass"
+  ],
+  "testCommands": ["npm test", "git diff --quiet main -- src/"]
+}

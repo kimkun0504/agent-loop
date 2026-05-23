@@ -1,0 +1,9 @@
+{
+  "acceptanceCriteria": [
+    "isValidUrl is defined exactly once in src/ (no longer duplicated)",
+    "both validate.js and normalize.js use the shared helper",
+    "test/validate.test.js and test/normalize.test.js are unchanged",
+    "npm test still passes"
+  ],
+  "testCommands": ["npm test", "git diff --quiet main -- test/"]
+}
