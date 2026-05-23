@@ -22,6 +22,7 @@
 import type { Executor, ExecutorInput, ExecutorResult } from './types.js';
 import { runCommand } from '../proc/run.js';
 import { buildExecutorPrompt } from './prompt.js';
+import { parseClaudeJsonOutput } from './claudeOutput.js';
 
 export interface ClaudeCliExecutorOptions {
   /** Path to the `claude` binary. Defaults to "claude" (must be on PATH). */
@@ -39,6 +40,10 @@ const DEFAULT_BINARY = 'claude';
 const DEFAULT_EXTRA_ARGS: ReadonlyArray<string> = [
   '--permission-mode',
   'acceptEdits',
+  // Switch to JSON output so we can parse usage / cost. The output is a
+  // single JSON object on stdout; see src/executor/claudeOutput.ts.
+  '--output-format',
+  'json',
 ];
 
 export class ClaudeCliExecutor implements Executor {
@@ -78,6 +83,18 @@ export class ClaudeCliExecutor implements Executor {
     const ok =
       !result.timedOut && !result.spawnFailed && result.exitCode === 0;
 
+    // Best-effort usage extraction. parseClaudeJsonOutput returns null on
+    // any structural mismatch; we log a warn and let usage stay undefined
+    // rather than failing the run (a missing token count shouldn't break
+    // execution; the budget check downstream will simply not fire).
+    const summary = ok ? parseClaudeJsonOutput(result.stdout) : null;
+    if (ok && !summary) {
+      input.logger?.warn('executor: could not parse claude JSON output', {
+        runId: input.run.id,
+        stdoutBytes: result.stdout.length,
+      });
+    }
+
     input.logger?.info('executor: agent finished', {
       runId: input.run.id,
       ok,
@@ -85,9 +102,12 @@ export class ClaudeCliExecutor implements Executor {
       durationMs: result.durationMs,
       timedOut: result.timedOut,
       spawnFailed: result.spawnFailed,
+      inputTokens: summary?.usage.inputTokens,
+      outputTokens: summary?.usage.outputTokens,
+      costUsd: summary?.usage.costUsd,
     });
 
-    return {
+    const out: ExecutorResult = {
       ok,
       exitCode: result.exitCode,
       durationMs: result.durationMs,
@@ -95,5 +115,7 @@ export class ClaudeCliExecutor implements Executor {
       timedOut: result.timedOut,
       spawnFailed: result.spawnFailed,
     };
+    if (summary) out.usage = summary.usage;
+    return out;
   }
 }

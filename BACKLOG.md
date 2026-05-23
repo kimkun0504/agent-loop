@@ -17,7 +17,6 @@ Things that work but aren't right. Items here came from real shortcuts taken dur
 
 | ID | Severity | Owner | Description | Added | Resolved |
 |---|---|---|---|---|---|
-| `polish-token-tracking` | P0 | agent | `ClaudeCliExecutor` reports `tokensSpent: 0` and `secondsSpent: 0` on every run. Cost observability is missing. Must be fixed before triage and planner agents land in Week 3 — otherwise we'll be making 3-4 LLM calls per task with no visibility. Approach: parse Claude CLI's output for token usage, or switch to the Anthropic SDK for executor invocations. Decide as part of the fix. | 2026-05-23 | — |
 | `polish-verifier-logging-symmetry` | P1 | agent | Verifier emits `running test command` on entry but no `command end` line on success — only on failure. Makes timing analysis impossible from the log alone. Fix: emit a `verifier: command end` line at INFO level on every command completion, regardless of exit code. | 2026-05-23 | — |
 | `polish-orphan-branch-cleanup` | P1 | agent | Failed runs leave orphan `agent/<runId>` branches on the remote, AND successful runs leave the local worktree directory on disk (see `polish-worktree-cleanup`). Bumped from P2 to P1 because the two issues are one piece of work: an `agent-loop gc` subcommand that, for any Run in a terminal phase older than N days, removes the worktree directory and (optionally) the remote branch. Default N=7. **Resolve together with `polish-worktree-cleanup`.** | 2026-05-23 | — |
 | `polish-worktree-cleanup` | P0 | agent | Successful runs (`phase=done`) leave their worktree at `~/.agent-loop/worktrees/<runId>/worktree` on disk forever. No code path calls `removeWorktree`. Direct violation of QUALITY Tier 1: "Orphan worktrees after a run: 0 — every completed run cleans up its worktree directory." The smoke run's worktree at `run-8ad39c33` is still on disk as I'm writing this. Local-disk half of the GC story; the remote-branch half is `polish-orphan-branch-cleanup`. **Resolve together with `polish-orphan-branch-cleanup`** — same `agent-loop gc` subcommand handles both. | 2026-05-23 | — |
@@ -74,4 +73,8 @@ A polish sprint runs after each Week N feature push. Sprint burns down P0 and P1
 
 Items that have been fixed. Format: `ID | Severity | Description | Resolved date | Closing commit`.
 
-(none yet)
+To find a closing commit by id: `git log --grep 'closes BACKLOG#<id>'`.
+
+| ID | Severity | Description | Resolved date | Closing commit |
+|---|---|---|---|---|
+| `polish-token-tracking` | P0 | `ClaudeCliExecutor` now invokes `claude --output-format json` and parses the result via `parseClaudeJsonOutput`. Token usage flows through new optional `ExecutorResult.usage` and `record_token_usage` event payload, with `Run.tokensSpent` accumulating the sum of all four token kinds (input/output/cache_read/cache_creation). Wall-clock recorded via `record_time_spent`. Fixture-driven parser tests guard against future CLI schema changes. | 2026-05-23 | `closes BACKLOG#polish-token-tracking` |

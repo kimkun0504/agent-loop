@@ -385,6 +385,71 @@ describe('tick: executing phase', () => {
     // The agent-loop commit message contains the spec title.
     expect(log.stdout).toContain('title');
   });
+
+  it('records token usage and time spent when executor returns usage', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    const deps = makeDeps(store, {
+      executor: {
+        execute: async (input) => {
+          // Side-effect: create a file so the commit step succeeds.
+          writeFileSync(join(input.worktreePath, 'NOTES.md'), 'agent was here\n');
+          return {
+            ok: true,
+            exitCode: 0,
+            durationMs: 2500,
+            outputLog: '',
+            timedOut: false,
+            spawnFailed: false,
+            usage: {
+              inputTokens: 1000,
+              outputTokens: 200,
+              cacheReadInputTokens: 30,
+              cacheCreationInputTokens: 4,
+              costUsd: 0.012,
+            },
+          };
+        },
+      },
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('verifying');
+    // 1000 + 200 + 30 + 4
+    expect(after.tokensSpent).toBe(1234);
+    // 2500ms -> 3 seconds (rounded)
+    expect(after.secondsSpent).toBe(3);
+
+    const events = store.listEvents(run.id);
+    const tokenEvent = events.find((e) => e.event.type === 'record_token_usage');
+    expect(tokenEvent).toBeDefined();
+    if (tokenEvent?.event.type === 'record_token_usage') {
+      expect(tokenEvent.event.tokens).toBe(1234);
+      expect(tokenEvent.event.usage?.costUsd).toBeCloseTo(0.012);
+      expect(tokenEvent.event.usage?.cacheReadInputTokens).toBe(30);
+    }
+  });
+
+  it('records usage even when the executor failed (failures still cost tokens)', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    const deps = makeDeps(store, {
+      executor: {
+        execute: async () => ({
+          ok: false,
+          exitCode: 1,
+          durationMs: 100,
+          outputLog: '',
+          timedOut: false,
+          spawnFailed: false,
+          usage: { inputTokens: 500, outputTokens: 5 },
+        }),
+      },
+    });
+    const after = await tick(deps, run);
+    // Should still land in failed (executor.ok=false), but tokens recorded.
+    expect(after.phase).toBe('failed');
+    expect(after.tokensSpent).toBe(505);
+  });
 });
 
 describe('tick: verifying phase', () => {

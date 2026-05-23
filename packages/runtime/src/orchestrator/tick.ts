@@ -39,6 +39,7 @@ import type { VerifyOptions } from '../verifier/exitCode.js';
 import { addWorktree } from '../git/worktree.js';
 import { isStopRequested } from '../fs/stop.js';
 import { runCommand } from '../proc/run.js';
+import { sumTokens } from '../executor/claudeOutput.js';
 import { applyEvent } from './apply.js';
 
 export type Verifier = (
@@ -124,6 +125,34 @@ async function tickExecuting(deps: Deps, run: Run): Promise<Run> {
     worktreePath,
     logger: deps.logger,
   });
+
+  // Record token usage and wall-clock against the Run, regardless of ok —
+  // a failed agent run still consumed tokens, and we want those reflected
+  // in the budget and the audit trail.
+  if (result.usage) {
+    applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'record_token_usage',
+        tokens: sumTokens(result.usage),
+        usage: result.usage,
+      },
+      deps.now(),
+    );
+  }
+  // Skip recording time when it rounds to 0 seconds (sub-500ms runs are
+  // typically test stubs; emitting an event for them just pollutes the
+  // audit log). Real runs are seconds to minutes long.
+  const secondsToRecord = Math.round(result.durationMs / 1000);
+  if (secondsToRecord > 0) {
+    applyEvent(
+      deps.store,
+      run.id,
+      { type: 'record_time_spent', seconds: secondsToRecord },
+      deps.now(),
+    );
+  }
 
   if (result.ok) {
     // Agents edit files but don't commit them. The PR opener needs commits

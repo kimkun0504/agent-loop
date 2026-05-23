@@ -10,7 +10,14 @@
  * Bugs in the agent are tolerable. Bugs in the state machine corrupt history.
  */
 
-import type { Phase, Run, RunId, SpecId, Failure } from '../types/index.js';
+import type {
+  Phase,
+  Run,
+  RunId,
+  SpecId,
+  Failure,
+  TokenUsage,
+} from '../types/index.js';
 
 // --- Events ----------------------------------------------------------------
 
@@ -35,7 +42,17 @@ export type Event =
   | { type: 'pr_opened' }
   | { type: 'pr_failed'; failure: Omit<Failure, 'phase'> }
   | { type: 'abandon'; reason: string }
-  | { type: 'record_token_usage'; tokens: number }
+  | {
+      type: 'record_token_usage';
+      /**
+       * Running-sum operand applied to Run.tokensSpent. Should equal the sum
+       * of all token kinds in `usage` (input + output + cache_read + cache_creation)
+       * when `usage` is present.
+       */
+      tokens: number;
+      /** Optional structured breakdown for the audit trail. */
+      usage?: TokenUsage;
+    }
   | { type: 'record_time_spent'; seconds: number }
   | { type: 'increment_attempt' };
 

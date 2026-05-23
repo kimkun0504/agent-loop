@@ -218,6 +218,30 @@ describe('non-phase-changing events', () => {
     expect(r3.version).toBe(r1.version + 2);
   });
 
+  it('record_token_usage accepts an optional structured usage payload', () => {
+    const r1 = runInPhase('executing');
+    const r2 = transition(
+      r1,
+      {
+        type: 'record_token_usage',
+        tokens: 1234,
+        usage: {
+          inputTokens: 1000,
+          outputTokens: 200,
+          cacheReadInputTokens: 30,
+          cacheCreationInputTokens: 4,
+          costUsd: 0.0123,
+        },
+      },
+      NOW,
+    );
+    // tokens (the operand) is what advances tokensSpent.
+    expect(r2.tokensSpent).toBe(1234);
+    // The usage payload itself is part of the event, not the Run — Run keeps
+    // only the running sum. The audit trail (events table) carries the breakdown.
+    expect(r2.phase).toBe('executing');
+  });
+
   it('increment_attempt bumps attemptCount within a phase', () => {
     const r1 = runInPhase('executing');
     const r2 = transition(r1, { type: 'increment_attempt' }, NOW);

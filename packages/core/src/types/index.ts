@@ -85,6 +85,26 @@ export interface Failure {
   artifactPath?: string;
 }
 
+// --- Token usage ----------------------------------------------------------
+
+/**
+ * Structured token usage for one LLM call (executor, triage, planner, etc).
+ * Recorded in `record_token_usage` event payloads; the running sum lives on
+ * `Run.tokensSpent` as a single number for budget comparisons. All four
+ * token kinds are billable (cache reads at a lower rate), so the sum used
+ * for budget checks includes all of them.
+ *
+ * Fields mirror what the Claude Code CLI's `--output-format json` emits;
+ * `costUsd` is included when the source provides it.
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  costUsd?: number;
+}
+
 // --- Run -------------------------------------------------------------------
 
 /**

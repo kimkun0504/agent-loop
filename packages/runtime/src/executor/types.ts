@@ -5,7 +5,7 @@
  * orchestrator.
  */
 
-import type { Logger, Run, Spec } from '@agent-loop/core';
+import type { Logger, Run, Spec, TokenUsage } from '@agent-loop/core';
 
 export interface ExecutorInput {
   run: Run;
@@ -31,6 +31,12 @@ export interface ExecutorResult {
   timedOut: boolean;
   /** True if the agent binary couldn't be found / spawned. */
   spawnFailed: boolean;
+  /**
+   * Token usage reported by the agent, when the executor can extract it.
+   * Undefined when the executor doesn't parse usage (test stubs) or when
+   * the agent's output couldn't be parsed (logged as a warn at the call site).
+   */
+  usage?: TokenUsage;
 }
 
 export interface Executor {
