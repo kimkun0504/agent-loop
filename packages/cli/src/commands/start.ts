@@ -40,7 +40,8 @@ import {
   runExitCodeVerifier,
   ClaudeCliExecutor,
   GhPrOpener,
-  runLoop,
+  tick,
+  isStopRequested,
   type Deps,
   type PrOpener,
   type PrOpenInput,
@@ -120,6 +121,7 @@ export async function start(opts: StartOptions): Promise<number> {
     store,
     logger,
     workspaceDir: paths.home,
+    worktreesDir: paths.worktreesDir,
     artifactsDir: paths.artifactsDir,
     repoDir: target,
     now,
@@ -156,10 +158,35 @@ export async function start(opts: StartOptions): Promise<number> {
   };
   process.once('SIGINT', handleSigint);
 
-  // --- Run the loop until terminal -----------------------------------------
+  // --- Drive THIS run until terminal --------------------------------------
+  //
+  // We don't use runLoop here. runLoop is the "keep an orchestrator alive"
+  // poller — it never exits on its own when the queue empties. `start` is
+  // single-shot: drive one specific run to terminal and return. Iterating
+  // tick() directly until the run is terminal is exactly that, plus it
+  // skips runLoop's 2s sleeps between phases (each tick advances a phase
+  // immediately, so the happy path is ~3 ticks back-to-back).
 
   try {
-    await runLoop(deps, { signal: controller.signal });
+    while (true) {
+      if (controller.signal.aborted) break;
+      if (isStopRequested(paths.home)) {
+        logger.info('start: STOP file present; halting', { runId });
+        break;
+      }
+      const current = store.getRun(runId);
+      if (!current) {
+        logger.error('start: run vanished from store', { runId });
+        break;
+      }
+      if (isTerminal(current.phase)) break;
+      try {
+        await tick(deps, current);
+      } catch (err) {
+        logger.error('start: tick threw', { runId, err: String(err) });
+        break;
+      }
+    }
   } finally {
     process.removeListener('SIGINT', handleSigint);
   }
