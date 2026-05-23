@@ -50,10 +50,10 @@ describe('cli scaffold', () => {
     expect(r.stderr.toLowerCase()).toMatch(/required option/);
   });
 
-  it('start stub responds (will be implemented in CLI step 7)', async () => {
+  it('start: real command, refuses unknown spec', async () => {
     const r = await run(['start', '--spec', 'x', '--target', '/tmp']);
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain('not yet implemented');
+    expect(r.stderr.toLowerCase()).toContain('unknown spec');
   });
 
   it('unknown subcommand exits non-zero', async () => {
