@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+runs/
+.env
+.env.local
+STOP

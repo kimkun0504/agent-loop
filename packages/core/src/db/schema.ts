@@ -1,0 +1,84 @@
+/**
+ * SQLite schema.
+ *
+ * Migrations are an ordered array of SQL strings. The runtime applies them
+ * in order, tracking the last-applied index in a `_migrations` table.
+ *
+ * Rules:
+ * - NEVER edit an existing migration. Add a new one.
+ * - Each migration must be idempotent or guarded (CREATE TABLE IF NOT EXISTS etc).
+ * - Schema lives in core because it's data, not I/O.
+ *
+ * Why SQLite: single file, no daemon, perfect for local-first tools. We can
+ * always swap for Postgres later — the schema is portable.
+ */
+
+export interface Migration {
+  readonly id: number;
+  readonly name: string;
+  readonly sql: string;
+}
+
+export const MIGRATIONS: ReadonlyArray<Migration> = [
+  {
+    id: 1,
+    name: 'initial',
+    sql: `
+      -- Runs are the unit of work. One row per task being processed.
+      CREATE TABLE IF NOT EXISTS runs (
+        id            TEXT PRIMARY KEY,
+        task_id       TEXT NOT NULL,
+        artifact_dir  TEXT NOT NULL,
+        branch        TEXT NOT NULL,
+        phase         TEXT NOT NULL,
+        spec_id       TEXT,
+        version       INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        tokens_spent  INTEGER NOT NULL DEFAULT 0,
+        seconds_spent INTEGER NOT NULL DEFAULT 0,
+        failure_json  TEXT,
+        abandoned_reason TEXT
+      );
+
+      -- Index for the orchestrator's main poll query: "next non-terminal run".
+      CREATE INDEX IF NOT EXISTS idx_runs_phase ON runs(phase);
+      CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(task_id);
+
+      -- Append-only log of every event applied. This is the audit trail.
+      -- We can rebuild any Run by replaying its events from this table.
+      CREATE TABLE IF NOT EXISTS events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id     TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload    TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        run_version_after INTEGER NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES runs(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
+
+      -- Specs are immutable once created.
+      CREATE TABLE IF NOT EXISTS specs (
+        id                    TEXT PRIMARY KEY,
+        run_id                TEXT NOT NULL UNIQUE,
+        title                 TEXT NOT NULL,
+        description           TEXT NOT NULL,
+        file_scope_json       TEXT NOT NULL,
+        acceptance_json       TEXT NOT NULL,
+        test_commands_json    TEXT NOT NULL,
+        budget_json           TEXT NOT NULL,
+        created_at            TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES runs(id)
+      );
+
+      -- Migration tracking.
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `,
+  },
+];
