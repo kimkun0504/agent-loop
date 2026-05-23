@@ -64,6 +64,11 @@ export {
 export { isStopRequested, STOP_FILE_NAME } from './fs/stop.js';
 export { loadDotenvFile, parseDotenv } from './config/dotenv.js';
 export {
+  createAnthropicClient,
+  type AnthropicClient,
+  type CreateAnthropicClientOptions,
+} from './agents/sdkClient.js';
+export {
   writeExecutorArtifacts,
   writeVerdictArtifact,
   writeMetaArtifact,

@@ -15,6 +15,8 @@ This file is read automatically by Claude Code. Keep it short and concrete.
 - **No `any`.** Use `unknown` and narrow. If you need an escape hatch, leave a comment explaining why.
 - **Branded IDs.** Don't pass raw strings as `RunId`/`SpecId`/`TaskId`. Use the constructor functions.
 - **Timestamps are ISO 8601 strings**, not `Date` objects, across module boundaries.
+- **API keys live in `~/.agent-loop/.env`.** Never commit `.env` files. Never read from arbitrary env vars in code — always go through `loadDotenvFile` in `packages/runtime/src/config/dotenv.ts`.
+- **SDK calls go through the agent modules in `packages/runtime/src/agents/`.** Do not `import` from `@anthropic-ai/sdk` anywhere else. Other code receives an `AnthropicClient` by dependency injection, constructed via `createAnthropicClient(...)`.
 
 ## Backlog discipline
 
