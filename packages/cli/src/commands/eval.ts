@@ -34,7 +34,12 @@ export interface EvalOptions {
 }
 
 export async function evalCmd(opts: EvalOptions): Promise<number> {
-  const cwd = process.cwd();
+  // pnpm sets INIT_CWD to the directory the user invoked pnpm from. That's
+  // the repo root when running `pnpm eval`. process.cwd() under
+  // `pnpm --filter <pkg> exec` is the package dir, which is the wrong place
+  // to look for evals/. Prefer INIT_CWD when set; fall back to cwd for
+  // direct ./bin/agent-loop invocations.
+  const cwd = process.env['INIT_CWD'] ?? process.cwd();
   const evalsRoot = join(cwd, 'evals');
   if (!existsSync(evalsRoot)) {
     process.stderr.write(
