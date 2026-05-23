@@ -810,6 +810,94 @@ describe('tick: opening_pr phase', () => {
     expect(after.phase).toBe('failed');
   });
 
+  it('removes the worktree on done (auto-cleanup)', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'opening_pr');
+    store.insertVerdict({
+      runId: run.id,
+      pass: true,
+      testResults: [],
+      semanticCheck: { matches: true, reasoning: 'ok' },
+      createdAt: NOW,
+    });
+    // We need a real worktree on disk to remove. addWorktree it.
+    const { addWorktree } = await import('../../src/git/worktree.js');
+    const wtPath = join(worktreesDir, run.id, 'worktree');
+    await addWorktree(repoDir, run.branch, wtPath);
+    expect(existsSync(wtPath)).toBe(true);
+
+    const after = await tick(makeDeps(store), run);
+    expect(after.phase).toBe('done');
+    // After auto-cleanup, the worktree directory is gone.
+    expect(existsSync(wtPath)).toBe(false);
+  });
+
+  it('does NOT remove the worktree when execution fails (failed runs preserved)', async () => {
+    // The other negative case: failure happens in executing, never reaches
+    // opening_pr at all. Worktree should still be intact.
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'executing');
+    const deps = makeDeps(store, {
+      executor: stubExecutor({
+        ok: false,
+        exitCode: 1,
+        durationMs: 1,
+        outputLog: '',
+        timedOut: false,
+        spawnFailed: false,
+      }),
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    const wtPath = join(worktreesDir, run.id, 'worktree');
+    expect(existsSync(wtPath)).toBe(true);
+  });
+
+  it('does NOT remove the worktree when verification fails', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying');
+    const deps = makeDeps(store, {
+      verifier: stubVerifier({
+        pass: false,
+        testResults: [],
+        semanticCheck: { matches: false, reasoning: 'no' },
+        createdAt: NOW,
+      }),
+    });
+    // Verifying doesn't itself touch the worktree dir; ensure we have one
+    // on disk to begin with (mimicking a prior executing tick).
+    const { addWorktree } = await import('../../src/git/worktree.js');
+    const wtPath = join(worktreesDir, run.id, 'worktree');
+    await addWorktree(repoDir, run.branch, wtPath);
+
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(existsSync(wtPath)).toBe(true);
+  });
+
+  it('does NOT remove the worktree on pr_failed (failed runs preserved for post-mortem)', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'opening_pr');
+    store.insertVerdict({
+      runId: run.id,
+      pass: true,
+      testResults: [],
+      semanticCheck: { matches: true, reasoning: 'ok' },
+      createdAt: NOW,
+    });
+    const { addWorktree } = await import('../../src/git/worktree.js');
+    const wtPath = join(worktreesDir, run.id, 'worktree');
+    await addWorktree(repoDir, run.branch, wtPath);
+
+    const deps = makeDeps(store, {
+      prOpener: stubPrOpener({ ok: false, error: 'remote unreachable' }),
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    // Worktree must remain — this is the run a human wants to debug.
+    expect(existsSync(wtPath)).toBe(true);
+  });
+
   it('passes the latest passing verdict to the PR opener', async () => {
     const store = freshStore();
     const { run } = seedRunAndSpec(store, 'opening_pr');

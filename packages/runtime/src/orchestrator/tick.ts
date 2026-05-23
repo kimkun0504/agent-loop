@@ -36,7 +36,7 @@ import type { Store } from '../db/store.js';
 import type { Executor } from '../executor/types.js';
 import type { PrOpener } from '../pr/types.js';
 import type { VerifyOptions } from '../verifier/exitCode.js';
-import { addWorktree } from '../git/worktree.js';
+import { addWorktree, removeWorktree } from '../git/worktree.js';
 import { isStopRequested } from '../fs/stop.js';
 import { runCommand } from '../proc/run.js';
 import { sumTokens } from '../executor/claudeOutput.js';
@@ -301,12 +301,35 @@ async function tickOpeningPr(deps: Deps, run: Run): Promise<Run> {
   });
 
   if (result.ok) {
-    return applyEvent(
+    const next = applyEvent(
       deps.store,
       run.id,
       { type: 'pr_opened', url: result.url },
       deps.now(),
     );
+    // Auto-cleanup on done. Successful runs no longer need their worktree —
+    // the agent's commits live on the branch (locally and on the remote),
+    // and the PR is the inspection surface. Failed and abandoned runs are
+    // explicitly NOT cleaned here (they're exactly the runs whose worktree
+    // a human will want to inspect). The gc subcommand handles the rest.
+    //
+    // Cleanup failure must NOT flip the run back from done to failed; the
+    // PR exists on GitHub, so the run is genuinely done. Log a warn and
+    // leave the orphan worktree for gc to sweep up.
+    try {
+      await removeWorktree(deps.repoDir, worktreePath);
+      deps.logger.info('cleanup: worktree removed', {
+        runId: run.id,
+        path: worktreePath,
+      });
+    } catch (err) {
+      deps.logger.warn('cleanup: removeWorktree failed (run remains done)', {
+        runId: run.id,
+        path: worktreePath,
+        err: String(err),
+      });
+    }
+    return next;
   }
   return failPr(deps, run, result.error);
 }

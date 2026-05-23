@@ -22,6 +22,9 @@ export {
   addWorktree,
   removeWorktree,
   listWorktrees,
+  deleteLocalBranch,
+  deleteRemoteBranch,
+  type GitRunner,
   type WorktreeEntry,
 } from './git/worktree.js';
 export { WorktreeAlreadyExistsError } from './git/errors.js';

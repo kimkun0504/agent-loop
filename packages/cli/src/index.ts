@@ -12,6 +12,7 @@ import { list } from './commands/list.js';
 import { inspect } from './commands/inspect.js';
 import { stop } from './commands/stop.js';
 import { status } from './commands/status.js';
+import { gc } from './commands/gc.js';
 
 async function main(argv: string[]): Promise<number> {
   const program = new Command();
@@ -56,6 +57,28 @@ async function main(argv: string[]): Promise<number> {
     .description('Show the current non-terminal run, if any')
     .action(async () => {
       process.exit(await status());
+    });
+
+  program
+    .command('gc')
+    .description(
+      'Garbage-collect terminal runs: remove worktrees, delete local (and optionally remote) branches',
+    )
+    .option('--age-days <n>', 'Min age of a terminal run to be eligible', '7')
+    .option('--dry-run', 'Print the plan, modify nothing', false)
+    .option('--remote', 'Also delete the remote branch (destructive)', false)
+    .option('--run <runId>', 'Clean a specific run instead of scanning by age')
+    .option('--yes', 'Skip the confirmation prompt for --remote', false)
+    .action(async (opts) => {
+      process.exit(
+        await gc({
+          ageDays: Number(opts.ageDays),
+          dryRun: Boolean(opts.dryRun),
+          remote: Boolean(opts.remote),
+          run: opts.run,
+          yes: Boolean(opts.yes),
+        }),
+      );
     });
 
   await program.parseAsync(argv);

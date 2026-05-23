@@ -12,7 +12,14 @@
 
 import { execa } from 'execa';
 import { existsSync } from 'node:fs';
+import { runCommand, type RunCommandResult } from '../proc/run.js';
 import { WorktreeAlreadyExistsError } from './errors.js';
+
+export type GitRunner = (
+  command: string,
+  args: string[],
+  options?: Parameters<typeof runCommand>[2],
+) => Promise<RunCommandResult>;
 
 export interface WorktreeEntry {
   path: string;
@@ -60,6 +67,37 @@ export async function listWorktrees(repo: string): Promise<WorktreeEntry[]> {
     { cwd: repo },
   );
   return parseWorktreePorcelain(stdout);
+}
+
+/**
+ * Delete a local branch in the given repo. `git branch -D` is used (force)
+ * so an unmerged agent branch is removed without prompting — agent-loop
+ * tracks merge state via the Run.phase, not git's merge bookkeeping.
+ *
+ * Returns the raw RunCommandResult so the caller can record success/failure
+ * to its audit log without unwrapping exceptions.
+ */
+export async function deleteLocalBranch(
+  repoDir: string,
+  branch: string,
+  opts: { runner?: GitRunner } = {},
+): Promise<RunCommandResult> {
+  const runner = opts.runner ?? runCommand;
+  return runner('git', ['-C', repoDir, 'branch', '-D', branch]);
+}
+
+/**
+ * Delete a remote branch via `git push origin --delete <branch>`. DESTRUCTIVE
+ * on shared state — callers (the gc command) must require explicit opt-in
+ * before invoking this, and never default to it.
+ */
+export async function deleteRemoteBranch(
+  repoDir: string,
+  branch: string,
+  opts: { runner?: GitRunner } = {},
+): Promise<RunCommandResult> {
+  const runner = opts.runner ?? runCommand;
+  return runner('git', ['-C', repoDir, 'push', 'origin', '--delete', branch]);
 }
 
 // Exported for tests. Each worktree block is separated by a blank line and
