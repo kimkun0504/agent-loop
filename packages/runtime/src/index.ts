@@ -11,6 +11,12 @@ export {
 } from './db/rows.js';
 export { applyEvent, type ApplyEventStore } from './orchestrator/apply.js';
 export { RunNotFoundError, VersionConflictError } from './orchestrator/errors.js';
+export { tick, type Deps, type Verifier } from './orchestrator/tick.js';
+export {
+  runLoop,
+  POLL_INTERVAL_MS,
+  type LoopOptions,
+} from './orchestrator/loop.js';
 export {
   addWorktree,
   removeWorktree,
