@@ -30,10 +30,10 @@ async function run(args: string[]): Promise<{
 }
 
 describe('cli scaffold', () => {
-  it('--help prints usage with all five subcommands', async () => {
+  it('--help prints usage with all wired subcommands', async () => {
     const r = await run(['--help']);
     expect(r.exitCode).toBe(0);
-    for (const cmd of ['start', 'list', 'inspect', 'stop', 'status']) {
+    for (const cmd of ['start', 'list', 'inspect', 'stop', 'status', 'gc', 'eval']) {
       expect(r.stdout).toContain(cmd);
     }
   });

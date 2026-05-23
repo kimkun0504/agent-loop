@@ -13,6 +13,7 @@ import { inspect } from './commands/inspect.js';
 import { stop } from './commands/stop.js';
 import { status } from './commands/status.js';
 import { gc } from './commands/gc.js';
+import { evalCmd } from './commands/eval.js';
 
 async function main(argv: string[]): Promise<number> {
   const program = new Command();
@@ -57,6 +58,22 @@ async function main(argv: string[]): Promise<number> {
     .description('Show the current non-terminal run, if any')
     .action(async () => {
       process.exit(await status());
+    });
+
+  program
+    .command('eval')
+    .description('Run the eval suite under <cwd>/evals/tasks/')
+    .option('--task <name>', 'Run only the named task')
+    .option('--output-dir <path>', 'Write results under this dir instead of evals/results/<ts>/')
+    .option('--verbose', 'Stream per-tick log output to stdout', false)
+    .action(async (opts) => {
+      process.exit(
+        await evalCmd({
+          task: opts.task,
+          outputDir: opts.outputDir,
+          verbose: Boolean(opts.verbose),
+        }),
+      );
     });
 
   program
