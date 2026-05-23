@@ -11,3 +11,10 @@ export {
 } from './db/rows.js';
 export { applyEvent, type ApplyEventStore } from './orchestrator/apply.js';
 export { RunNotFoundError, VersionConflictError } from './orchestrator/errors.js';
+export {
+  addWorktree,
+  removeWorktree,
+  listWorktrees,
+  type WorktreeEntry,
+} from './git/worktree.js';
+export { WorktreeAlreadyExistsError } from './git/errors.js';
