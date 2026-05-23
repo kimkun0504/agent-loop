@@ -71,6 +71,12 @@ export {
   type CreateAnthropicClientOptions,
 } from './agents/sdkClient.js';
 export {
+  collectRepoContext,
+  DEFAULT_CAPS as REPO_CONTEXT_DEFAULT_CAPS,
+  type RepoContextSnapshot,
+  type CollectOptions as CollectRepoContextOptions,
+} from './agents/repoContext.js';
+export {
   writeExecutorArtifacts,
   writeVerdictArtifact,
   writeMetaArtifact,
