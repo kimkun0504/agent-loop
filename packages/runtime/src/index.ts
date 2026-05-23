@@ -38,3 +38,16 @@ export {
   ClaudeCliExecutor,
   type ClaudeCliExecutorOptions,
 } from './executor/claude.js';
+export {
+  type PrOpener,
+  type PrOpenInput,
+  type PrOpenResult,
+} from './pr/types.js';
+export {
+  GhPrOpener,
+  defaultBuildTitle,
+  defaultBuildBody,
+  parsePrUrl,
+  type GhPrOpenerOptions,
+  type PrRunner,
+} from './pr/open.js';
