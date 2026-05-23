@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@agent-loop/core": "workspace:*",
+    "@agent-loop/example-specs": "workspace:*",
     "@agent-loop/runtime": "workspace:*",
     "commander": "^12.1.0"
   },

@@ -21,11 +21,20 @@ importers:
         specifier: ^1.2.0
         version: 1.6.1(@types/node@20.19.41)
 
+  examples/specs:
+    dependencies:
+      '@agent-loop/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   packages/cli:
     dependencies:
       '@agent-loop/core':
         specifier: workspace:*
         version: link:../core
+      '@agent-loop/example-specs':
+        specifier: workspace:*
+        version: link:../../examples/specs
       '@agent-loop/runtime':
         specifier: workspace:*
         version: link:../runtime

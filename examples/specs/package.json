@@ -1,0 +1,14 @@
+{
+  "name": "@agent-loop/example-specs",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./hardcoded": "./hardcoded.ts"
+  },
+  "dependencies": {
+    "@agent-loop/core": "workspace:*"
+  }
+}
