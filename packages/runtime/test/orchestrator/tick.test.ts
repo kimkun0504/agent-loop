@@ -208,11 +208,186 @@ describe('tick: no-op phases', () => {
     expect(after.version).toBe(0);
   });
 
-  it('is a no-op on triaging', async () => {
+  it('triaging WITHOUT anthropicClient fails fast as internal error', async () => {
+    // Previously a no-op; week 3 changes this — a Run that reaches triaging
+    // means triage is in the path, which means a client must be wired.
+    // Missing client is a wiring bug at the call site.
     const store = freshStore();
     const { run } = seedRunAndSpec(store, 'triaging');
     const after = await tick(makeDeps(store), run);
-    expect(after.phase).toBe('triaging');
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('internal');
+    expect(after.failure?.message).toContain('anthropicClient');
+  });
+});
+
+describe('tick: auto-advance bridge phases (Phase D)', () => {
+  it('awaiting_spec_approval auto-applies spec_approved', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'awaiting_spec_approval');
+    const after = await tick(makeDeps(store), run);
+    expect(after.phase).toBe('planning');
+  });
+
+  it('planning auto-applies planning_succeeded (no planner agent yet — Phase E)', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'planning');
+    const after = await tick(makeDeps(store), run);
+    expect(after.phase).toBe('awaiting_plan_approval');
+  });
+
+  it('awaiting_plan_approval auto-applies plan_approved', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'awaiting_plan_approval');
+    const after = await tick(makeDeps(store), run);
+    expect(after.phase).toBe('executing');
+  });
+});
+
+describe('tick: triaging with anthropicClient', () => {
+  const validSpecInput = {
+    kind: 'spec',
+    spec: {
+      title: 'Triaged: add foo',
+      description: 'Add a foo helper to src/foo.js. Tests in test/foo.test.js.',
+      fileScope: ['src/foo.js', 'test/foo.test.js'],
+      acceptanceCriteria: ['foo(1) returns 1', 'tests pass'],
+      testCommands: ['npm test'],
+    },
+  };
+
+  function toolUseResponse(input: unknown): unknown {
+    return {
+      id: 'msg', type: 'message', role: 'assistant',
+      model: 'claude-haiku-4-5-20251001',
+      content: [{ type: 'tool_use', id: 't', name: 'submit_triage_result', input }],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    };
+  }
+
+  function fakeClient(responses: Array<unknown>): unknown {
+    let i = 0;
+    return {
+      messages: {
+        create: async () => {
+          const r = responses[i++];
+          if (r === undefined) throw new Error('no more canned responses');
+          if (r instanceof Error) throw r;
+          return r;
+        },
+      },
+    };
+  }
+
+  function seedTriagingRunWithTask(
+    store: Store,
+    taskBody = 'Add a foo helper.',
+  ): Run {
+    const id = freshRunId();
+    const taskId = TaskId(`local:${id}`);
+    store.insertTask({
+      id: taskId,
+      title: 'add foo helper',
+      body: taskBody,
+      source: 'local',
+      createdAt: NOW,
+    });
+    const run: Run = {
+      id: RunId(id),
+      taskId,
+      artifactDir: join(artifactsDir, id),
+      branch: `agent/${id}`,
+      phase: 'triaging',
+      version: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    };
+    store.insertRun(run);
+    return run;
+  }
+
+  it('inserts the spec and advances to awaiting_spec_approval on triage success', async () => {
+    const store = freshStore();
+    const run = seedTriagingRunWithTask(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([toolUseResponse(validSpecInput)]) as Deps['anthropicClient'],
+    });
+
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('awaiting_spec_approval');
+    expect(after.specId).toBe(`spec-${run.id}`);
+
+    const spec = store.getSpecByRun(run.id);
+    expect(spec?.title).toBe('Triaged: add foo');
+    expect(spec?.fileScope).toEqual(['src/foo.js', 'test/foo.test.js']);
+  });
+
+  it('advances to failed with category=spec_invalid on too_vague rejection', async () => {
+    const store = freshStore();
+    const run = seedTriagingRunWithTask(store, 'improve the perf');
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([
+        toolUseResponse({
+          kind: 'rejection',
+          rejection: {
+            reason: 'too_vague',
+            message: 'no testable criteria',
+            clarifyingQuestions: ['which file?'],
+          },
+        }),
+      ]) as Deps['anthropicClient'],
+    });
+
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('spec_invalid');
+    expect(after.failure?.message).toContain('Clarifying questions');
+    expect(after.failure?.message).toContain('which file?');
+  });
+
+  it('advances to failed with category=transient on sdk_error', async () => {
+    const store = freshStore();
+    const run = seedTriagingRunWithTask(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([new Error('rate limited')]) as Deps['anthropicClient'],
+    });
+
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('transient');
+    expect(after.failure?.message).toContain('rate limited');
+  });
+
+  it('advances to failed with category=internal when the run has no Task row', async () => {
+    const store = freshStore();
+    // Seed a run in triaging WITHOUT inserting the task.
+    const id = freshRunId();
+    const run: Run = {
+      id: RunId(id),
+      taskId: TaskId(`local:${id}`),
+      artifactDir: join(artifactsDir, id),
+      branch: `agent/${id}`,
+      phase: 'triaging',
+      version: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    };
+    store.insertRun(run);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([toolUseResponse(validSpecInput)]) as Deps['anthropicClient'],
+    });
+
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('internal');
+    expect(after.failure?.message).toContain('no task found');
   });
 });
 

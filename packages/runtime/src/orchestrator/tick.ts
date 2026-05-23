@@ -30,6 +30,9 @@ import {
   type Spec,
   type Verdict,
   type Failure,
+  type FailureCategory,
+  DEFAULT_BUDGET,
+  SpecId,
   isTerminal,
 } from '@agent-loop/core';
 import type { Store } from '../db/store.js';
@@ -44,6 +47,16 @@ import {
   writeExecutorArtifacts,
   writeVerdictArtifact,
 } from '../artifacts/write.js';
+import type { AnthropicClient } from '../agents/sdkClient.js';
+import {
+  runTriage,
+  type TriageDeps,
+  type TriageInput,
+} from '../agents/triage.js';
+import type {
+  TriageResult,
+  TriageRejectionReason,
+} from '../agents/triageSchema.js';
 import { applyEvent } from './apply.js';
 
 export type Verifier = (
@@ -67,6 +80,12 @@ export interface Deps {
   executor: Executor;
   verifier: Verifier;
   prOpener: PrOpener;
+  /**
+   * Anthropic SDK client. Required when a Run will pass through the
+   * `triaging` phase (Phase D+). The baseline eval runner skips
+   * triaging via `driveToExecuting` and can omit this.
+   */
+  anthropicClient?: AnthropicClient;
 }
 
 export async function tick(deps: Deps, run: Run): Promise<Run> {
@@ -77,6 +96,35 @@ export async function tick(deps: Deps, run: Run): Promise<Run> {
   if (isTerminal(run.phase)) return run;
 
   switch (run.phase) {
+    case 'triaging':
+      return tickTriaging(deps, run);
+    case 'awaiting_spec_approval':
+      // Auto-approve in week 3 (no human-approval mechanism yet). Will gain
+      // an opt-out when human review lands.
+      return applyEvent(
+        deps.store,
+        run.id,
+        { type: 'spec_approved' },
+        deps.now(),
+      );
+    case 'planning':
+      // Phase D: no planner agent yet. Auto-advance so triaged runs make
+      // it to executing. Phase E replaces this case with a tickPlanning
+      // that calls runPlanner.
+      return applyEvent(
+        deps.store,
+        run.id,
+        { type: 'planning_succeeded' },
+        deps.now(),
+      );
+    case 'awaiting_plan_approval':
+      // Same auto-approval pattern as awaiting_spec_approval.
+      return applyEvent(
+        deps.store,
+        run.id,
+        { type: 'plan_approved' },
+        deps.now(),
+      );
     case 'executing':
       return tickExecuting(deps, run);
     case 'verifying':
@@ -338,6 +386,116 @@ async function tickOpeningPr(deps: Deps, run: Run): Promise<Run> {
 
 function worktreePathFor(deps: Deps, runId: Run['id']): string {
   return join(deps.worktreesDir, runId, 'worktree');
+}
+
+// --- Triaging ---------------------------------------------------------------
+
+async function tickTriaging(deps: Deps, run: Run): Promise<Run> {
+  if (!deps.anthropicClient) {
+    // The Run reached `triaging` but no SDK client is configured. This is
+    // a wiring bug at the call site (start.ts or eval runner) — fail the
+    // run loudly so it surfaces rather than infinite-loop on a no-op tick.
+    return applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'triage_failed',
+        failure: {
+          category: 'internal',
+          message:
+            'tickTriaging called but Deps.anthropicClient is not configured',
+        },
+      },
+      deps.now(),
+    );
+  }
+
+  const task = deps.store.getTask(run.taskId);
+  if (!task) {
+    return applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'triage_failed',
+        failure: {
+          category: 'internal',
+          message: `no task found for taskId ${run.taskId}`,
+        },
+      },
+      deps.now(),
+    );
+  }
+
+  const triageDeps: TriageDeps = {
+    client: deps.anthropicClient,
+    store: deps.store,
+    runId: run.id,
+    now: deps.now,
+    logger: deps.logger,
+  };
+  const triageInput: TriageInput = {
+    taskDescription: task.body,
+    targetRepoPath: deps.repoDir,
+  };
+  if (task.title.length > 0) triageInput.taskTitle = task.title;
+
+  const result = await runTriage(triageDeps, triageInput);
+
+  if (result.ok) {
+    const specId = SpecId(`spec-${run.id}`);
+    deps.store.insertSpec({
+      id: specId,
+      runId: run.id,
+      title: result.spec.title,
+      description: result.spec.description,
+      fileScope: result.spec.fileScope,
+      acceptanceCriteria: result.spec.acceptanceCriteria,
+      testCommands: result.spec.testCommands,
+      // Orchestrator owns the budget — we don't trust the model to size it.
+      budget: DEFAULT_BUDGET,
+      createdAt: deps.now(),
+    });
+    return applyEvent(
+      deps.store,
+      run.id,
+      { type: 'triage_succeeded', specId },
+      deps.now(),
+    );
+  }
+
+  // Rejection path. Map the agent's rejection reason to a state-machine
+  // failure category. The `clarifyingQuestions` are appended to the message
+  // for now — Phase F's GitHub source will post them as an issue comment.
+  const failureMessage =
+    result.clarifyingQuestions && result.clarifyingQuestions.length > 0
+      ? `${result.message}\n\nClarifying questions:\n${result.clarifyingQuestions.map((q) => `- ${q}`).join('\n')}`
+      : result.message;
+  return applyEvent(
+    deps.store,
+    run.id,
+    {
+      type: 'triage_failed',
+      failure: {
+        category: mapTriageRejectionToCategory(result.reason),
+        message: failureMessage,
+      },
+    },
+    deps.now(),
+  );
+}
+
+function mapTriageRejectionToCategory(
+  reason: TriageRejectionReason,
+): FailureCategory {
+  switch (reason) {
+    case 'not_actionable':
+    case 'too_vague':
+    case 'out_of_scope':
+    case 'invalid_output':
+      return 'spec_invalid';
+    case 'sdk_error':
+      return 'transient';
+  }
 }
 
 const BUDGET_WARN_FRACTION = 0.8;
