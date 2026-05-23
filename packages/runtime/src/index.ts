@@ -15,6 +15,7 @@ export { tick, type Deps, type Verifier } from './orchestrator/tick.js';
 export {
   runLoop,
   POLL_INTERVAL_MS,
+  NON_TERMINAL_PHASES,
   type LoopOptions,
 } from './orchestrator/loop.js';
 export {

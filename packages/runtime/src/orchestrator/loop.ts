@@ -19,7 +19,7 @@ import { tick, type Deps } from './tick.js';
 
 export const POLL_INTERVAL_MS = 2_000;
 
-const NON_TERMINAL_PHASES: ReadonlyArray<Phase> = [
+export const NON_TERMINAL_PHASES: ReadonlyArray<Phase> = [
   'queued',
   'triaging',
   'awaiting_spec_approval',
