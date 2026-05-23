@@ -47,17 +47,17 @@ Each task targets a node on the skill matrix. Names use the verb-noun shape used
 **Task 1 — `add-clamp` (additive feature)**
 
 - Base: `src/math.js` exports `multiply(a, b) => a * b`. One existing test asserts `multiply(2, 3) === 6`.
-- `task.md`: "Add a `clamp(value, min, max)` helper to `src/math.js`. It should pin value into the `[min, max]` range — return `min` when value is below, `max` when above, value otherwise. We have a unit-test set up already in `test/math.test.js`; please add tests for the new function. Make sure the existing multiply test still passes."
+- `task.md`: "Add a `clamp(value, min, max)` helper to `src/math.js`. It should pin value into the `[min, max]` range — return `min` when value is below, `max` when above, value otherwise. The existing test file `test/math.test.js` tests `multiply`. Add a new test file `test/clamp.test.js` (or add tests to the existing file — your choice) for the new function. Make sure the existing multiply test still passes."
 - Acceptance criteria: clamp exists and is exported; behaves correctly for value in/below/above range; existing multiply test still passes.
 - testCommands: `["node --test test/*.test.js"]`
 
 **Task 2 — `fix-off-by-one` (bug fix)**
 
 - Base: `src/lastn.js` has `lastN(arr, n)` that incorrectly returns `arr.slice(-n - 1)` (one too many items). `test/lastn.test.js` matches the buggy behavior (assertion: `lastN([1,2,3,4], 2)` deepEquals `[2,3,4]`).
-- `task.md`: "`lastN` is returning one too many items when n>0 — it should return exactly n items. The test currently expects the wrong behavior; fix both the function and the test. Make sure the edge cases (`n=0`, `n>arr.length`) still behave sensibly (`n=0` returns `[]`, `n>length` returns the whole array)."
-- Acceptance criteria: `lastN([1,2,3,4], 2) === [3,4]`; n=0 returns []; n>length returns full array; tests pass.
+- `task.md`: "`lastN` is returning one too many items when n>0 — it should return exactly n items. The test currently expects the wrong behavior; fix both the function and the test. Also handle the edge cases: `n=0` returns `[]`, `n>arr.length` returns the whole array. Note: in JavaScript, `arr.slice(-n)` does NOT do the right thing when `n=0` (it returns the whole array, because `-0 === 0` and `slice(0)` is everything) — handle that case explicitly."
+- Acceptance criteria: `lastN([1,2,3,4], 2)` deepEquals `[3,4]`; `lastN([1,2,3], 0)` deepEquals `[]`; `lastN([1,2,3], 99)` deepEquals `[1,2,3]`; tests pass.
 - testCommands: `["node --test test/*.test.js"]`
-- Tricky bit: tests the agent's willingness to UPDATE an existing wrong test, not just modify source.
+- Tricky bits: (a) tests the agent's willingness to UPDATE an existing wrong test, not just modify source; (b) the `-0` gotcha is called out explicitly in `task.md` so it tests reading-carefully rather than blind-spot trivia.
 
 **Task 3 — `extract-helper` (refactor without behavior change)**
 
@@ -70,9 +70,10 @@ Each task targets a node on the skill matrix. Names use the verb-noun shape used
 **Task 4 — `rename-export` (cross-file change)**
 
 - Base: `src/date.js` exports `parseDate(s)`; `src/format.js` and `test/format.test.js` both import it.
-- `task.md`: "Rename `parseDate` to `parseIsoDate` everywhere. The function only handles ISO 8601 input and the old name is misleading new contributors. Update all imports and references."
+- `task.md`: "Rename `parseDate` to `parseIsoDate` everywhere it's referenced. It's defined in `src/date.js` and used from at least `src/format.js` and `test/format.test.js`. The function only handles ISO 8601 input and the old name is misleading new contributors."
 - Acceptance criteria: tests pass; no `parseDate` token remains in `src/` or `test/`.
 - testCommands: `["node --test test/*.test.js", "! grep -rE 'parseDate\\b' src/ test/"]`
+- Note: the "at least" wording bounds the work (the agent knows where to start) without restricting it — if future fixture changes add more references, the spec still covers them. Removes "test of grep attention" from the signal; keeps "test of cross-file editing."
 
 **Task 5 — `add-edge-case-tests` (test-only change)**
 
@@ -418,6 +419,15 @@ interface TaskSource {
   /** Pull up to `limit` tasks that have not yet been picked up. */
   fetchNew(opts?: { limit?: number }): Promise<Task[]>;
 
+  /**
+   * Fetch a specific task by id. Returns null if the task doesn't exist
+   * or isn't accessible. Used by the `--issue <n>` CLI path so we don't
+   * have to filter through `fetchNew` (which is brittle if the label
+   * state has changed between when the human ran the CLI and when the
+   * orchestrator looks).
+   */
+  fetchById(taskId: TaskId): Promise<Task | null>;
+
   /** Acknowledge that a task is being worked. */
   markStarted(taskId: TaskId, runId: RunId): Promise<void>;
 
@@ -457,13 +467,16 @@ Module: `packages/runtime/src/sources/github.ts`. Uses `gh` CLI via the existing
 
 **Operations (all via `gh issue edit` / `gh issue list` / `gh issue comment`):**
 
-| Method          | gh invocation                                                                                           |
-|-----------------|---------------------------------------------------------------------------------------------------------|
-| `fetchNew`      | `gh issue list --repo <repo> --label agent-ready --state open --json number,title,body,createdAt,url`   |
-| `markStarted`   | `gh issue edit <n> --add-label agent-working --remove-label agent-ready` + `gh issue comment <n>`       |
-| `markDone`      | `gh issue edit <n> --add-label agent-done --remove-label agent-working` + comment with PR URL           |
-| `markFailed`    | `gh issue edit <n> --add-label agent-failed --remove-label agent-working` + comment with reason         |
-| `markNeedsInfo` | `gh issue edit <n> --add-label agent-needs-info --remove-label agent-working` + comment with questions  |
+| Method          | gh invocation                                                                                                |
+|-----------------|--------------------------------------------------------------------------------------------------------------|
+| `fetchNew`      | `gh issue list --repo <repo> --label agent-ready --state open --json number,title,body,createdAt,url`        |
+| `fetchById`     | `gh issue view <n> --repo <repo> --json number,title,body,createdAt,url,labels` (returns null on exit ≠ 0)   |
+| `markStarted`   | `gh issue edit <n> --add-label agent-working --remove-label agent-ready` + `gh issue comment <n>` (unless quiet) |
+| `markDone`      | `gh issue edit <n> --add-label agent-done --remove-label agent-working` + comment with PR URL (unless quiet) |
+| `markFailed`    | `gh issue edit <n> --add-label agent-failed --remove-label agent-working` + comment with reason (unless quiet) |
+| `markNeedsInfo` | `gh issue edit <n> --add-label agent-needs-info --remove-label agent-working` + comment with questions (unless quiet) |
+
+**Constructor option: `{ quiet?: boolean }` (default false).** When `quiet: true`, label transitions still fire; the comment-on-issue calls are suppressed. Useful for high-traffic repos where the per-state comments become noise. CLI exposes via `--quiet` on `agent-loop start --source github`. Real repos will eventually need this; the demo target gets the verbose default to exercise the full audit trail.
 
 State transitions on the GitHub side:
 
@@ -481,19 +494,22 @@ opened with [agent-ready]
 
 ```
 agent-loop start --source github --repo kimkun0504/agent-loop-target \
-  --target ~/projects/agent-loop-target
+  --target ~/projects/agent-loop-target [--issue <n>] [--quiet]
 ```
 
 Behavior:
-1. CLI builds a `GhTaskSource` for the given `--repo`.
-2. Calls `source.fetchNew({ limit: 1 })` — picks the oldest open `agent-ready` issue.
-3. `source.markStarted(taskId, runId)` adds `agent-working` label + comment.
+1. CLI builds a `GhTaskSource` for the given `--repo` (with `{ quiet: opts.quiet }`).
+2. If `--issue <n>` is given: `source.fetchById(...)` — must exist; exit with error if not.
+   Otherwise: `source.fetchNew({ limit: 1 })` — picks the oldest open `agent-ready` issue.
+3. `source.markStarted(taskId, runId)` adds `agent-working` label (and comment, unless `--quiet`).
 4. Creates a Task row + Run row.
 5. Runs through triage → planner → executor → verifier → opening_pr → done (same per-tick loop as the existing start command).
 6. On terminal: call the appropriate `markDone` / `markFailed` / `markNeedsInfo` based on `Run.phase` + `Run.failure`.
 7. Exit.
 
-Optional flag: `--issue <n>` to target a specific issue number instead of taking the oldest.
+Flags:
+- `--issue <n>` — target a specific issue (via `fetchById`) rather than the oldest agent-ready.
+- `--quiet` — suppress GitHub comments; label transitions still happen.
 
 ### D4. Task ↔ Run mapping
 
@@ -662,6 +678,16 @@ No new event types needed. Existing taxonomy covers Week 3:
 
 The validator-retry pattern uses `increment_attempt` to record that we re-prompted the model. Caps at attempts ≤ 2 (one initial + one retry). The spec.budget.maxAttemptsPerPhase (currently 3) governs this implicitly.
 
+**Critical: `record_token_usage` for the failed call is applied BEFORE the retry begins.** Without this rule, a malformed-output retry storm could spend N×budget worth of tokens while the orchestrator only sees the cost of the final successful call — a real hole in budget enforcement. The exact sequence inside an agent module:
+
+1. SDK call 1 → invalid output → validator rejects.
+2. **Apply `record_token_usage` for call 1's tokens.** The call still cost real money.
+3. Apply `increment_attempt`.
+4. SDK call 2 with validator feedback prepended → valid (in the common case) → return.
+5. Caller applies `record_token_usage` for call 2 via the normal post-call flow.
+
+If call 2 also fails validation, the agent returns a `TriageRejection { reason: 'invalid_output' }` (or planner equivalent) — but only after applying call 2's `record_token_usage` too. The tick-layer budget check sees the cumulative cost, and a retry storm trips `budget_exceeded` correctly.
+
 ### F4. CLAUDE.md additions
 
 New bullets to land in CLAUDE.md as part of Week 3:
@@ -818,13 +844,22 @@ This number is what every later phase compares against. If after Phase D, pass r
 
 ### H3. Explicit signoffs requested before code lands
 
-1. **Use of `@anthropic-ai/sdk` as the SDK dep (no Zod).** Sign off on SDK; confirm "no Zod" still holds.
-2. **Eval DB location: `evals/runs.db` (project-scoped, gitignored).** Sign off.
-3. **Pinning the Anthropic SDK version tightly.** Sign off.
-4. **GhTaskSource adds comments to GitHub issues** at each state transition (markStarted/Done/Failed/NeedsInfo). Could be noisy on a busy repo; for the demo repo it's the audit trail. Sign off.
-5. **Eval runner exit code: non-zero if any task fails** (continues running all tasks regardless). Sign off — CI-friendly.
-6. **Hardcoded-spec bypass continues to skip BOTH triage AND planner** — gives us an offline-friendly executor smoke path. Sign off.
-7. **The TaskSource interface as designed in §D1.** Sign off; will become a stable contract once GhTaskSource is built against it.
+1. **Use of `@anthropic-ai/sdk` as the SDK dep (no Zod).**
+   _Resolution: signed off; revisit if total validator code crosses ~200 lines._
+2. **Eval DB location: `evals/runs.db` (project-scoped, gitignored).**
+   _Resolution: signed off._
+3. **Pinning the Anthropic SDK version tightly.**
+   _Resolution: signed off._
+4. **GhTaskSource adds comments to GitHub issues** at each state transition (markStarted/Done/Failed/NeedsInfo).
+   _Resolution: signed off, with refinement. Constructor takes `{ quiet?: boolean }` (default `false`); CLI exposes via `--quiet`. Default = comments-on (audit trail for the demo repo); real repos will eventually run with `--quiet`. See §D2._
+5. **Eval runner exit code: non-zero if any task fails** (continues running all tasks regardless).
+   _Resolution: signed off — CI-friendly._
+6. **Hardcoded-spec bypass continues to skip BOTH triage AND planner** — gives us an offline-friendly executor smoke path.
+   _Resolution: signed off (called out as critical)._
+7. **The TaskSource interface as designed in §D1.**
+   _Resolution: signed off after the catch-5 amendment. `fetchById(taskId)` added to the interface to support the `--issue <n>` path without filtering through `fetchNew`._
+8. **The exact wording of the 5 eval task `task.md` files.** This is the input to triage forever — it is the highest-stakes design choice in the plan and is recorded in §A2.
+   _Resolution: catches 1–3 from the kickoff response updated the wording for `add-clamp`, `fix-off-by-one`, and `rename-export` — see §A2 for the final text. Tasks 3 (`extract-helper`) and 5 (`add-edge-case-tests`) are unchanged from the original plan and I have no push-back on either: `extract-helper`'s "your call where" is the right judgment-testing knob, and `add-edge-case-tests` enumerates the cases concretely with explicit "don't modify src/" instruction. Signed off._
 
 ---
 
