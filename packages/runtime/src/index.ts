@@ -28,3 +28,13 @@ export {
   summarizeOutput,
   type VerifyOptions,
 } from './verifier/exitCode.js';
+export {
+  type Executor,
+  type ExecutorInput,
+  type ExecutorResult,
+} from './executor/types.js';
+export { buildExecutorPrompt } from './executor/prompt.js';
+export {
+  ClaudeCliExecutor,
+  type ClaudeCliExecutorOptions,
+} from './executor/claude.js';
