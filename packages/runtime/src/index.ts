@@ -9,3 +9,5 @@ export {
   type EventRow,
   type EventRecord,
 } from './db/rows.js';
+export { applyEvent, type ApplyEventStore } from './orchestrator/apply.js';
+export { RunNotFoundError, VersionConflictError } from './orchestrator/errors.js';
