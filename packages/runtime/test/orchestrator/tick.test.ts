@@ -35,6 +35,7 @@ import {
   DEFAULT_BUDGET,
   Logger as CoreLogger,
 } from '@agent-loop/core';
+import { writeFileSync } from 'node:fs';
 import { applyMigrations } from '../../src/db/migrate.js';
 import { Store } from '../../src/db/store.js';
 import { tick, type Deps, type Verifier } from '../../src/orchestrator/tick.js';
@@ -480,6 +481,182 @@ describe('tick: executing phase', () => {
     // Should still land in failed (executor.ok=false), but tokens recorded.
     expect(after.phase).toBe('failed');
     expect(after.tokensSpent).toBe(505);
+  });
+
+  it('fails with budget_exceeded when tokensSpent exceeds spec.budget.maxTokens', async () => {
+    const store = freshStore();
+    // Tight budget: 100 tokens. Executor will report 500 input + 50 output.
+    const { run } = seedRunAndSpec(store, 'executing', {});
+    // Override the spec the seed inserted with a tight-budget spec.
+    const tightSpec = store.getSpecByRun(run.id)!;
+    // Rebuild the spec row with maxTokens=100.
+    // (Easier than a new helper: delete+insert via raw SQL would dodge the
+    // domain converter; instead we update through the store's transaction.)
+    store.transaction(() => {
+      // Spec table has no update method on the Store (immutable); we
+      // simulate by inserting the run/spec fresh in a new store.
+      // Instead, re-run with a brand-new seed that uses a tight budget.
+    });
+    // Simpler approach: seed fresh state with a tight-budget spec.
+    const store2 = freshStore();
+    const id = freshRunId();
+    const newRun = {
+      id: RunId(id),
+      taskId: TaskId('task-1'),
+      artifactDir: join(artifactsDir, id),
+      branch: `agent/${id}`,
+      phase: 'executing' as const,
+      version: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    };
+    store2.insertRun(newRun);
+    store2.insertSpec({
+      ...tightSpec,
+      id: SpecId(`spec-${id}`),
+      runId: RunId(id),
+      budget: { ...DEFAULT_BUDGET, maxTokens: 100 },
+    });
+    const deps = makeDeps(store2, {
+      executor: {
+        execute: async (input) => {
+          writeFileSync(join(input.worktreePath, 'NOTES.md'), 'edit\n');
+          return {
+            ok: true,
+            exitCode: 0,
+            durationMs: 1,
+            outputLog: '',
+            timedOut: false,
+            spawnFailed: false,
+            usage: { inputTokens: 500, outputTokens: 50 },
+          };
+        },
+      },
+    });
+    const after = await tick(deps, newRun);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('budget_exceeded');
+    expect(after.failure?.message).toContain('550');
+    expect(after.failure?.message).toContain('100');
+  });
+
+  it('emits a warn log at >=80% budget usage even when not exceeded', async () => {
+    const store = freshStore();
+    const id = freshRunId();
+    const newRun = {
+      id: RunId(id),
+      taskId: TaskId('task-1'),
+      artifactDir: join(artifactsDir, id),
+      branch: `agent/${id}`,
+      phase: 'executing' as const,
+      version: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    };
+    store.insertRun(newRun);
+    store.insertSpec({
+      id: SpecId(`spec-${id}`),
+      runId: RunId(id),
+      title: 't',
+      description: 'd',
+      fileScope: ['**/*'],
+      acceptanceCriteria: ['ac'],
+      testCommands: ['true'],
+      budget: { ...DEFAULT_BUDGET, maxTokens: 1000 },
+      createdAt: NOW,
+    });
+
+    const warns: Array<{ msg: string; ctx: Record<string, unknown> }> = [];
+    const capturingLogger = new CoreLogger({ level: 'warn', console: false });
+    capturingLogger.warn = (msg, ctx = {}): void => {
+      warns.push({ msg, ctx });
+    };
+    const deps = makeDeps(store, {
+      logger: capturingLogger,
+      executor: {
+        execute: async (input) => {
+          writeFileSync(join(input.worktreePath, 'NOTES.md'), 'edit\n');
+          return {
+            ok: true,
+            exitCode: 0,
+            durationMs: 1,
+            outputLog: '',
+            timedOut: false,
+            spawnFailed: false,
+            // 900 tokens / 1000 max = 90% -> warn but not over
+            usage: { inputTokens: 800, outputTokens: 100 },
+          };
+        },
+      },
+    });
+    const after = await tick(deps, newRun);
+    expect(after.phase).toBe('verifying');
+    const warnRecord = warns.find((w) => w.msg.startsWith('budget:'));
+    expect(warnRecord).toBeDefined();
+    expect(warnRecord?.ctx['pctUsed']).toBe('90.0');
+  });
+
+  it('does NOT warn or fail when usage is well under budget', async () => {
+    const store = freshStore();
+    const id = freshRunId();
+    const newRun = {
+      id: RunId(id),
+      taskId: TaskId('task-1'),
+      artifactDir: join(artifactsDir, id),
+      branch: `agent/${id}`,
+      phase: 'executing' as const,
+      version: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    };
+    store.insertRun(newRun);
+    store.insertSpec({
+      id: SpecId(`spec-${id}`),
+      runId: RunId(id),
+      title: 't',
+      description: 'd',
+      fileScope: ['**/*'],
+      acceptanceCriteria: ['ac'],
+      testCommands: ['true'],
+      budget: { ...DEFAULT_BUDGET, maxTokens: 10_000 },
+      createdAt: NOW,
+    });
+
+    const warns: string[] = [];
+    const capturingLogger = new CoreLogger({ level: 'warn', console: false });
+    capturingLogger.warn = (msg): void => {
+      warns.push(msg);
+    };
+    const deps = makeDeps(store, {
+      logger: capturingLogger,
+      executor: {
+        execute: async (input) => {
+          writeFileSync(join(input.worktreePath, 'NOTES.md'), 'edit\n');
+          return {
+            ok: true,
+            exitCode: 0,
+            durationMs: 1,
+            outputLog: '',
+            timedOut: false,
+            spawnFailed: false,
+            // 200 / 10000 = 2%
+            usage: { inputTokens: 150, outputTokens: 50 },
+          };
+        },
+      },
+    });
+    const after = await tick(deps, newRun);
+    expect(after.phase).toBe('verifying');
+    expect(warns.filter((m) => m.startsWith('budget:'))).toHaveLength(0);
   });
 });
 

@@ -138,6 +138,14 @@ async function tickExecuting(deps: Deps, run: Run): Promise<Run> {
   // Record token usage and wall-clock against the Run, regardless of ok —
   // a failed agent run still consumed tokens, and we want those reflected
   // in the budget and the audit trail.
+  //
+  // BUDGET ENFORCEMENT NOTE: token-budget checks below are post-call, not
+  // mid-call. We catch a run that EXCEEDED budget only after the agent
+  // finished its current invocation; we cannot interrupt the agent during
+  // a tool call. The mid-call brake is spec.budget.maxSeconds (subprocess
+  // wall-clock timeout in proc/run.ts). Tighter mid-call enforcement would
+  // require agent-level cooperation (e.g., a periodic check tool the agent
+  // calls between turns) — deferred until that pattern matters.
   if (result.usage) {
     applyEvent(
       deps.store,
@@ -159,6 +167,25 @@ async function tickExecuting(deps: Deps, run: Run): Promise<Run> {
       deps.store,
       run.id,
       { type: 'record_time_spent', seconds: secondsToRecord },
+      deps.now(),
+    );
+  }
+
+  // Budget check. See BUDGET ENFORCEMENT NOTE above for the mid-call
+  // limitation. Done after recording tokens so the check sees the running
+  // sum, including this phase's contribution.
+  const afterRecord = deps.store.getRun(run.id)!;
+  if (checkTokenBudget(deps, afterRecord, spec)) {
+    return applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'execution_failed',
+        failure: {
+          category: 'budget_exceeded',
+          message: `token budget exceeded: ${afterRecord.tokensSpent} > ${spec.budget.maxTokens}`,
+        },
+      },
       deps.now(),
     );
   }
@@ -288,6 +315,33 @@ async function tickOpeningPr(deps: Deps, run: Run): Promise<Run> {
 
 function worktreePathFor(deps: Deps, runId: Run['id']): string {
   return join(deps.worktreesDir, runId, 'worktree');
+}
+
+const BUDGET_WARN_FRACTION = 0.8;
+
+/**
+ * Compare Run.tokensSpent against spec.budget.maxTokens. Emits a
+ * warn-level log at >= BUDGET_WARN_FRACTION usage as an early-warning
+ * signal even when not yet exceeded — hard cutoffs alone aren't enough,
+ * and an early warning is cheap.
+ *
+ * Returns true if the Run is OVER budget; the caller is expected to apply
+ * an `execution_failed` event with category `budget_exceeded`. See the
+ * BUDGET ENFORCEMENT NOTE in tickExecuting for the post-call limitation.
+ */
+function checkTokenBudget(deps: Deps, run: Run, spec: Spec): boolean {
+  const used = run.tokensSpent;
+  const max = spec.budget.maxTokens;
+  if (used > max) return true;
+  if (used >= max * BUDGET_WARN_FRACTION) {
+    deps.logger.warn('budget: approaching token limit', {
+      runId: run.id,
+      tokensSpent: used,
+      maxTokens: max,
+      pctUsed: ((used / max) * 100).toFixed(1),
+    });
+  }
+  return false;
 }
 
 /**
