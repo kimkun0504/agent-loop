@@ -1,0 +1,25 @@
+{
+  "name": "@agent-loop/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": {
+    "agent-loop": "./bin/agent-loop"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@agent-loop/core": "workspace:*",
+    "@agent-loop/runtime": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "execa": "^9.0.0",
+    "tsx": "^4.7.0",
+    "vitest": "^1.6.1"
+  }
+}

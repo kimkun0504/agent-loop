@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+# Week 2 invocation shim.
+#
+# A `bin` entry normally points to a JS file Node can execute directly. Our
+# entry point is TypeScript (src/index.ts), so this shim resolves tsx and
+# hands off. A proper build step that emits a JS bin in dist/ is deferred.
+#
+# tsx lookup order (most specific first):
+#   1. <cli>/node_modules/.bin/tsx — when invoked through pnpm exec
+#   2. <repo>/node_modules/.bin/tsx — pnpm-hoisted workspace dep
+#   3. `command -v tsx` — fallback to PATH
+#
+# Documented invocation forms (both work):
+#   ./packages/cli/bin/agent-loop <subcommand> ...
+#   pnpm --filter @agent-loop/cli exec ./bin/agent-loop <subcommand> ...
+
+DIR="$(cd "$(dirname "$0")" && pwd -P)"
+PKG_DIR="$(cd "$DIR/.." && pwd -P)"
+WS_ROOT="$(cd "$PKG_DIR/../.." && pwd -P)"
+ENTRY="$PKG_DIR/src/index.ts"
+
+if [ -x "$PKG_DIR/node_modules/.bin/tsx" ]; then
+  exec "$PKG_DIR/node_modules/.bin/tsx" "$ENTRY" "$@"
+elif [ -x "$WS_ROOT/node_modules/.bin/tsx" ]; then
+  exec "$WS_ROOT/node_modules/.bin/tsx" "$ENTRY" "$@"
+elif command -v tsx >/dev/null 2>&1; then
+  exec tsx "$ENTRY" "$@"
+fi
+
+echo "agent-loop: tsx not found. Run \`pnpm install\` at the repo root." >&2
+exit 127
