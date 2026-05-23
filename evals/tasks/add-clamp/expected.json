@@ -4,7 +4,8 @@
     "clamp(5, 0, 10) === 5 (value in range, returned unchanged)",
     "clamp(-3, 0, 10) === 0 (value below min, returned as min)",
     "clamp(99, 0, 10) === 10 (value above max, returned as max)",
+    "at least one test for clamp exists in test/",
     "existing multiply test still passes"
   ],
-  "testCommands": ["npm test"]
+  "testCommands": ["npm test", "grep -rE \"clamp\\(\" test/ > /dev/null"]
 }
