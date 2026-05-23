@@ -81,4 +81,38 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       );
     `,
   },
+  {
+    id: 2,
+    name: 'plans_and_verdicts',
+    sql: `
+      -- Plans: one per run. The Plan type has no own id; run_id is the PK.
+      -- Re-planning is modeled as a new run, not a second plan row.
+      CREATE TABLE IF NOT EXISTS plans (
+        run_id              TEXT PRIMARY KEY,
+        spec_id             TEXT NOT NULL,
+        files_to_touch_json TEXT NOT NULL,
+        approach            TEXT NOT NULL,
+        risks_json          TEXT NOT NULL,
+        test_strategy       TEXT NOT NULL,
+        created_at          TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES runs(id),
+        FOREIGN KEY (spec_id) REFERENCES specs(id)
+      );
+
+      -- Verdicts: append-only. Verifier may produce multiple rows per run
+      -- once verification_failed -> executing retries land in week 3.
+      -- The Verdict type has no own id; an internal autoincrement preserves
+      -- order without leaking into the domain type.
+      CREATE TABLE IF NOT EXISTS verdicts (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id              TEXT NOT NULL,
+        pass                INTEGER NOT NULL,
+        test_results_json   TEXT NOT NULL,
+        semantic_check_json TEXT NOT NULL,
+        created_at          TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES runs(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_verdicts_run ON verdicts(run_id, id);
+    `,
+  },
 ];
