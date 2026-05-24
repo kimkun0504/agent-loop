@@ -137,5 +137,66 @@ function formatReportMd(s: EvalSummary): string {
     lines.push('');
   }
 
+  appendCalibrationSection(lines, s);
+
   return lines.join('\n');
+}
+
+/**
+ * Calibration disagreements + coverage section. Emitted only when at
+ * least one task ran with calibration mode enabled (= at least one
+ * EvalTaskResult has a calibrationAnchor field). Denominator M is the
+ * count of tasks where the anchor produced a verdict — runs where the
+ * anchor never ran (calibration mode off, or no calibrationTestCommands)
+ * are excluded, preventing structural disagreements from polluting the
+ * agreement rate. See docs/triage-verifier-refactor.md §"Eval report format".
+ */
+function appendCalibrationSection(lines: string[], s: EvalSummary): void {
+  const withAnchor = s.perTask.filter((t) => t.calibrationAnchor !== undefined);
+  if (withAnchor.length === 0) return;
+
+  const disagreements = withAnchor.filter(
+    (t) => t.calibrationAnchor?.agreement === false,
+  );
+
+  lines.push('## Calibration disagreements');
+  lines.push('');
+  if (disagreements.length === 0) {
+    lines.push(
+      `0/${withAnchor.length} tasks disagreed (anchor and semantic verifier in full agreement).`,
+    );
+    lines.push('');
+  } else {
+    lines.push(`${disagreements.length}/${withAnchor.length} tasks disagreed.`);
+    lines.push('');
+    for (const t of disagreements) {
+      const a = t.calibrationAnchor!;
+      const direction = a.anchorPass
+        ? 'anchor=pass, semantic=fail'
+        : 'anchor=fail, semantic=pass (potential false positive)';
+      lines.push(`- \`${t.name}\`: ${direction}`);
+      lines.push('  Anchor commands:');
+      for (let i = 0; i < a.commands.length; i++) {
+        lines.push(`    - \`${a.commands[i]}\` → exit ${a.exitCodes[i] ?? '?'}`);
+      }
+      if (t.semanticReasoning) {
+        lines.push(`  Semantic verdict reasoning: ${t.semanticReasoning}`);
+      }
+      lines.push(
+        `  Investigate: open verdict-001.json + executor.log under the run's artifact dir (run \`${t.runId}\`). If the semantic verifier's reasoning cites diff evidence that contradicts what the anchor's exit code reports, the anchor is over-strict (false fail) — likely whitespace/encoding noise. If the reasoning is correct and matches what the anchor would report, the verifier is over-permissive (rubber-stamp) or under-strict (over-permissive).`,
+      );
+    }
+    lines.push('');
+  }
+
+  lines.push('## Calibration coverage');
+  lines.push('');
+  lines.push(`${withAnchor.length}/${s.totalTasks} tasks produced an anchor verdict.`);
+  if (withAnchor.length < s.totalTasks) {
+    lines.push('');
+    lines.push(
+      `Tasks excluded from the calibration disagreement count: those whose \`expected.json\` has no \`calibrationTestCommands\` field (anchor inactive). Adding the anchor to all tasks would tighten the calibration signal — but a 0/${withAnchor.length} rate on the tasks WITH an anchor is what gates \`gap-calibration-anchor-removal\`.`,
+    );
+  }
+  lines.push('');
 }

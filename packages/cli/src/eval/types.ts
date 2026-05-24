@@ -61,6 +61,26 @@ export interface EvalTaskResult {
   perPhase: Partial<Record<Phase, PhaseMetrics>>;
   /** Failure context if the run did not reach done. */
   failure: Failure | null;
+  /**
+   * Calibration-anchor outcome from the latest verdict, if calibration
+   * mode was active for this task. Undefined for production runs and for
+   * eval runs without --calibration-mode. Drives the report's "Calibration
+   * disagreements" and "Calibration coverage" sections.
+   */
+  calibrationAnchor?: CalibrationAnchorSnapshot;
+  /**
+   * Reasoning string from the latest verdict's semanticCheck. Useful in
+   * the disagreement detail block when the semantic verifier marked
+   * met:false on a specific criterion.
+   */
+  semanticReasoning?: string;
+}
+
+export interface CalibrationAnchorSnapshot {
+  commands: string[];
+  exitCodes: number[];
+  anchorPass: boolean;
+  agreement: boolean;
 }
 
 export interface EvalSummary {

@@ -7,7 +7,7 @@
  * exitCode helper would lose composition coverage.
  */
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -235,7 +235,7 @@ describe('runVerifier: SDK error policy', () => {
   });
 });
 
-describe('runVerifier: calibration anchor not yet wired (step 9)', () => {
+describe('runVerifier: calibration mode OFF (production)', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'agent-loop-runverifier-'));
@@ -256,21 +256,134 @@ describe('runVerifier: calibration anchor not yet wired (step 9)', () => {
     expect(r.verdict.calibrationAnchor).toBeUndefined();
   });
 
-  it('runs no calibration shell commands when calibrationTestCommands absent', async () => {
+  it('runs no calibration shell commands when calibrationMode is false', async () => {
     mkPassingScript(dir);
     const spec = makeSpec(['./pass.sh'], ['c1']);
-    let runnerCalls = 0;
-    const countingDiff = async (): Promise<RunCommandResult> => {
-      runnerCalls++;
-      return stubDiffRunner();
-    };
+    const anchorSpy = vi.fn();
+    const client = clientWithJudgments([
+      { criterion: 'c1', met: true, reasoning: 'r' },
+    ]);
+    // calibrationTestCommands present, but calibrationMode is false →
+    // anchor must not run (the field is dormant in production).
+    await runVerifier(freshRun(), spec, {
+      cwd: dir,
+      client,
+      diffRunner: stubDiffRunner,
+      calibrationTestCommands: ['echo never'],
+      calibrationRunner: anchorSpy,
+    });
+    expect(anchorSpy).not.toHaveBeenCalled();
+  });
+
+  it('runs no calibration shell commands when calibrationTestCommands is empty', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpec(['./pass.sh'], ['c1']);
+    const anchorSpy = vi.fn();
     const client = clientWithJudgments([
       { criterion: 'c1', met: true, reasoning: 'r' },
     ]);
     await runVerifier(freshRun(), spec, {
-      cwd: dir, client, diffRunner: countingDiff,
+      cwd: dir,
+      client,
+      diffRunner: stubDiffRunner,
+      calibrationMode: true,
+      calibrationTestCommands: [],
+      calibrationRunner: anchorSpy,
     });
-    // Only the diff helper was invoked via the spy; no anchor commands.
-    expect(runnerCalls).toBe(1);
+    expect(anchorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('runVerifier: calibration mode ON (eval)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-loop-runverifier-'));
+  });
+  afterEach(() => {
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  });
+
+  const anchorPassRunner = async (): Promise<RunCommandResult> => ({
+    exitCode: 0, stdout: '', stderr: '', durationMs: 1,
+    timedOut: false, spawnFailed: false,
+  });
+  const anchorFailRunner = async (): Promise<RunCommandResult> => ({
+    exitCode: 1, stdout: '', stderr: 'fail', durationMs: 1,
+    timedOut: false, spawnFailed: false,
+  });
+
+  it('attaches calibrationAnchor with agreement=true when both sides pass', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpec(['./pass.sh'], ['c1']);
+    const client = clientWithJudgments([
+      { criterion: 'c1', met: true, reasoning: 'r' },
+    ]);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir,
+      client,
+      diffRunner: stubDiffRunner,
+      calibrationMode: true,
+      calibrationTestCommands: ['echo ok'],
+      calibrationRunner: anchorPassRunner,
+    });
+    expect(r.verdict.calibrationAnchor).toBeDefined();
+    expect(r.verdict.calibrationAnchor?.agreement).toBe(true);
+    expect(r.verdict.calibrationAnchor?.anchorPass).toBe(true);
+    expect(r.verdict.pass).toBe(true);
+  });
+
+  it('flags disagreement when anchor fails but semantic passes (potential false positive)', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpec(['./pass.sh'], ['c1']);
+    const client = clientWithJudgments([
+      { criterion: 'c1', met: true, reasoning: 'r' },
+    ]);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir,
+      client,
+      diffRunner: stubDiffRunner,
+      calibrationMode: true,
+      calibrationTestCommands: ['echo bad'],
+      calibrationRunner: anchorFailRunner,
+    });
+    expect(r.verdict.calibrationAnchor?.agreement).toBe(false);
+    expect(r.verdict.calibrationAnchor?.anchorPass).toBe(false);
+    // Semantic verdict is authoritative — run still passes.
+    expect(r.verdict.pass).toBe(true);
+  });
+
+  it('flags disagreement when anchor passes but semantic fails', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpec(['./pass.sh'], ['c1']);
+    const client = clientWithJudgments([
+      { criterion: 'c1', met: false, reasoning: 'not met' },
+    ]);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir,
+      client,
+      diffRunner: stubDiffRunner,
+      calibrationMode: true,
+      calibrationTestCommands: ['echo ok'],
+      calibrationRunner: anchorPassRunner,
+    });
+    expect(r.verdict.calibrationAnchor?.agreement).toBe(false);
+    expect(r.verdict.calibrationAnchor?.anchorPass).toBe(true);
+    // Semantic verdict is authoritative — run fails.
+    expect(r.verdict.pass).toBe(false);
+  });
+
+  it('attaches anchor even when exit-code fails (semantic skipped)', async () => {
+    mkFailingScript(dir);
+    const spec = makeSpec(['./fail.sh'], ['c1']);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir,
+      calibrationMode: true,
+      calibrationTestCommands: ['echo ok'],
+      calibrationRunner: anchorPassRunner,
+    });
+    expect(r.verdict.calibrationAnchor).toBeDefined();
+    // anchor passed, overall verdict failed → disagreement
+    expect(r.verdict.calibrationAnchor?.agreement).toBe(false);
+    expect(r.verdict.pass).toBe(false);
   });
 });
