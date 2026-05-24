@@ -21,8 +21,10 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Run, Spec, Verdict, Failure } from '@agent-loop/core';
+import type { Run, Spec, Verdict, Failure, Plan } from '@agent-loop/core';
 import type { ExecutorResult } from '../executor/types.js';
+import type { PlannerResult } from '../agents/plannerSchema.js';
+import type { TriageResult } from '../agents/triageSchema.js';
 
 export const ARTIFACT_SCHEMA_VERSION = 1;
 
@@ -190,5 +192,83 @@ export function writeMetaArtifact(
   writeFileSync(
     join(runArtifactDir, 'meta.json'),
     JSON.stringify(meta, null, 2) + '\n',
+  );
+}
+
+// --- Triage --------------------------------------------------------------
+
+export interface TriageArtifactJson {
+  schemaVersion: 1;
+  result: TriageResult;
+  durationMs: number;
+}
+
+export function writeTriageArtifact(
+  runArtifactDir: string,
+  result: TriageResult,
+  durationMs: number,
+): void {
+  mkdirSync(runArtifactDir, { recursive: true });
+  const json: TriageArtifactJson = {
+    schemaVersion: ARTIFACT_SCHEMA_VERSION,
+    result,
+    durationMs,
+  };
+  writeFileSync(
+    join(runArtifactDir, 'triage.json'),
+    JSON.stringify(json, null, 2) + '\n',
+  );
+}
+
+// --- Planner -------------------------------------------------------------
+
+export interface PlannerArtifactJson {
+  schemaVersion: 1;
+  result: PlannerResult;
+  durationMs: number;
+}
+
+export function writePlannerArtifact(
+  runArtifactDir: string,
+  result: PlannerResult,
+  durationMs: number,
+): void {
+  mkdirSync(runArtifactDir, { recursive: true });
+  const json: PlannerArtifactJson = {
+    schemaVersion: ARTIFACT_SCHEMA_VERSION,
+    result,
+    durationMs,
+  };
+  writeFileSync(
+    join(runArtifactDir, 'planner.json'),
+    JSON.stringify(json, null, 2) + '\n',
+  );
+}
+
+// --- Plan ----------------------------------------------------------------
+
+export interface PlanArtifactJson {
+  schemaVersion: 1;
+  plan: Plan;
+}
+
+/**
+ * Mirror of the `plans` table row, written to disk for human inspection
+ * and for the CHECKPOINT 3 instrumentation that scans planner outputs.
+ * Only written when the planner succeeded (otherwise there's no plan to
+ * persist; the rejection is captured in planner.json).
+ */
+export function writePlanArtifact(
+  runArtifactDir: string,
+  plan: Plan,
+): void {
+  mkdirSync(runArtifactDir, { recursive: true });
+  const json: PlanArtifactJson = {
+    schemaVersion: ARTIFACT_SCHEMA_VERSION,
+    plan,
+  };
+  writeFileSync(
+    join(runArtifactDir, 'plan.json'),
+    JSON.stringify(json, null, 2) + '\n',
   );
 }

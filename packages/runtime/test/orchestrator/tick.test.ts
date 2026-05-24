@@ -229,11 +229,15 @@ describe('tick: auto-advance bridge phases (Phase D)', () => {
     expect(after.phase).toBe('planning');
   });
 
-  it('planning auto-applies planning_succeeded (no planner agent yet — Phase E)', async () => {
+  it('planning WITHOUT anthropicClient fails fast as internal error (Phase E swap)', async () => {
+    // Phase D had this as a no-planner auto-advance. Phase E wires
+    // runPlanner; same "anthropicClient required" pattern as triaging.
     const store = freshStore();
     const { run } = seedRunAndSpec(store, 'planning');
     const after = await tick(makeDeps(store), run);
-    expect(after.phase).toBe('awaiting_plan_approval');
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('internal');
+    expect(after.failure?.message).toContain('anthropicClient');
   });
 
   it('awaiting_plan_approval auto-applies plan_approved', async () => {
@@ -388,6 +392,150 @@ describe('tick: triaging with anthropicClient', () => {
     expect(after.phase).toBe('failed');
     expect(after.failure?.category).toBe('internal');
     expect(after.failure?.message).toContain('no task found');
+  });
+});
+
+describe('tick: planning with anthropicClient', () => {
+  const validPlanInput = {
+    kind: 'plan',
+    plan: {
+      filesToTouch: [
+        { path: 'src/foo.js', action: 'modify', reason: 'add export' },
+      ],
+      approach: 'add a function and export it.',
+      risks: [],
+      testStrategy: 'run npm test.',
+    },
+  };
+
+  function plannerToolResponse(input: unknown): unknown {
+    return {
+      id: 'msg',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-sonnet-4-6',
+      content: [{ type: 'tool_use', id: 't', name: 'submit_plan_result', input }],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 3000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    };
+  }
+
+  function fakeClient(responses: Array<unknown>): unknown {
+    let i = 0;
+    return {
+      messages: {
+        create: async () => {
+          const r = responses[i++];
+          if (r === undefined) throw new Error('no more canned responses');
+          if (r instanceof Error) throw r;
+          return r;
+        },
+      },
+    };
+  }
+
+  /** Seed a planning-phase run with run.specId wired (tickPlanning needs it). */
+  function seedPlanningRunWithSpecId(store: Store): { run: Run; spec: Spec } {
+    const { run, spec } = seedRunAndSpec(store, 'planning');
+    store.updateRunByVersion({ ...run, specId: spec.id, version: 1 }, 0);
+    return { run: store.getRun(run.id)!, spec };
+  }
+
+  it('inserts the plan and advances to awaiting_plan_approval on success', async () => {
+    const store = freshStore();
+    const { run } = seedPlanningRunWithSpecId(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([plannerToolResponse(validPlanInput)]) as Deps['anthropicClient'],
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('awaiting_plan_approval');
+    expect(store.getPlanByRun(run.id)?.approach).toContain('add a function');
+  });
+
+  it('advances to failed with spec_invalid on planner unimplementable rejection', async () => {
+    const store = freshStore();
+    const { run } = seedPlanningRunWithSpecId(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([
+        plannerToolResponse({
+          kind: 'rejection',
+          rejection: { reason: 'unimplementable', message: 'cannot do that' },
+        }),
+      ]) as Deps['anthropicClient'],
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('spec_invalid');
+    expect(after.failure?.message).toContain('cannot do that');
+  });
+
+  it('advances to failed with transient on sdk_error', async () => {
+    const store = freshStore();
+    const { run } = seedPlanningRunWithSpecId(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([new Error('rate limited')]) as Deps['anthropicClient'],
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('transient');
+  });
+
+  it('advances to failed with internal when run.specId is unset', async () => {
+    // Build a planning-phase run that somehow has no specId (shouldn't
+    // happen in production, but the guard exists).
+    const store = freshStore();
+    const id = freshRunId();
+    const run: Run = {
+      id: RunId(id),
+      taskId: TaskId('task-1'),
+      artifactDir: join(artifactsDir, id),
+      branch: `agent/${id}`,
+      phase: 'planning',
+      version: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      attemptCount: 0,
+      tokensSpent: 0,
+      secondsSpent: 0,
+    };
+    store.insertRun(run);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([plannerToolResponse(validPlanInput)]) as Deps['anthropicClient'],
+    });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('internal');
+    expect(after.failure?.message).toContain('specId');
+  });
+
+  it('writes planner.json and plan.json under the artifact dir on success', async () => {
+    const store = freshStore();
+    const { run } = seedPlanningRunWithSpecId(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([plannerToolResponse(validPlanInput)]) as Deps['anthropicClient'],
+    });
+    await tick(deps, run);
+    const dir = join(artifactsDir, run.id);
+    expect(existsSync(join(dir, 'planner.json'))).toBe(true);
+    expect(existsSync(join(dir, 'plan.json'))).toBe(true);
+  });
+
+  it('writes planner.json on rejection too (post-mortem signal)', async () => {
+    const store = freshStore();
+    const { run } = seedPlanningRunWithSpecId(store);
+    const deps = makeDeps(store, {
+      anthropicClient: fakeClient([
+        plannerToolResponse({
+          kind: 'rejection',
+          rejection: { reason: 'unimplementable', message: 'no' },
+        }),
+      ]) as Deps['anthropicClient'],
+    });
+    await tick(deps, run);
+    const dir = join(artifactsDir, run.id);
+    expect(existsSync(join(dir, 'planner.json'))).toBe(true);
+    // No plan.json because no plan was produced.
+    expect(existsSync(join(dir, 'plan.json'))).toBe(false);
   });
 });
 

@@ -46,6 +46,9 @@ import { sumTokens } from '../executor/claudeOutput.js';
 import {
   writeExecutorArtifacts,
   writeVerdictArtifact,
+  writeTriageArtifact,
+  writePlannerArtifact,
+  writePlanArtifact,
 } from '../artifacts/write.js';
 import type { AnthropicClient } from '../agents/sdkClient.js';
 import {
@@ -53,10 +56,13 @@ import {
   type TriageDeps,
   type TriageInput,
 } from '../agents/triage.js';
-import type {
-  TriageResult,
-  TriageRejectionReason,
-} from '../agents/triageSchema.js';
+import type { TriageRejectionReason } from '../agents/triageSchema.js';
+import {
+  runPlanner,
+  type PlannerDeps,
+  type PlannerInput,
+} from '../agents/planner.js';
+import type { PlannerRejectionReason } from '../agents/plannerSchema.js';
 import { applyEvent } from './apply.js';
 
 export type Verifier = (
@@ -108,15 +114,7 @@ export async function tick(deps: Deps, run: Run): Promise<Run> {
         deps.now(),
       );
     case 'planning':
-      // Phase D: no planner agent yet. Auto-advance so triaged runs make
-      // it to executing. Phase E replaces this case with a tickPlanning
-      // that calls runPlanner.
-      return applyEvent(
-        deps.store,
-        run.id,
-        { type: 'planning_succeeded' },
-        deps.now(),
-      );
+      return tickPlanning(deps, run);
     case 'awaiting_plan_approval':
       // Same auto-approval pattern as awaiting_spec_approval.
       return applyEvent(
@@ -439,7 +437,15 @@ async function tickTriaging(deps: Deps, run: Run): Promise<Run> {
   };
   if (task.title.length > 0) triageInput.taskTitle = task.title;
 
+  const triageStart = Date.now();
   const result = await runTriage(triageDeps, triageInput);
+  const triageDuration = Date.now() - triageStart;
+
+  // Persist the full triage result regardless of outcome — the rejection
+  // payload (with clarifyingQuestions) is exactly what we want to read
+  // when diagnosing why a run failed at triage.
+  const runArtifactDir = join(deps.artifactsDir, run.id);
+  writeTriageArtifact(runArtifactDir, result, triageDuration);
 
   if (result.ok) {
     const specId = SpecId(`spec-${run.id}`);
@@ -491,6 +497,139 @@ function mapTriageRejectionToCategory(
     case 'not_actionable':
     case 'too_vague':
     case 'out_of_scope':
+    case 'invalid_output':
+      return 'spec_invalid';
+    case 'sdk_error':
+      return 'transient';
+  }
+}
+
+// --- Planning -------------------------------------------------------------
+
+async function tickPlanning(deps: Deps, run: Run): Promise<Run> {
+  if (!deps.anthropicClient) {
+    return applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'planning_failed',
+        failure: {
+          category: 'internal',
+          message:
+            'tickPlanning called but Deps.anthropicClient is not configured',
+        },
+      },
+      deps.now(),
+    );
+  }
+  if (!run.specId) {
+    return applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'planning_failed',
+        failure: {
+          category: 'internal',
+          message: 'tickPlanning called but run.specId is not set',
+        },
+      },
+      deps.now(),
+    );
+  }
+  const spec = deps.store.getSpec(run.specId);
+  if (!spec) {
+    return applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'planning_failed',
+        failure: {
+          category: 'internal',
+          message: `spec not found for id ${run.specId}`,
+        },
+      },
+      deps.now(),
+    );
+  }
+
+  const plannerDeps: PlannerDeps = {
+    client: deps.anthropicClient,
+    store: deps.store,
+    runId: run.id,
+    now: deps.now,
+    logger: deps.logger,
+  };
+  const plannerInput: PlannerInput = { spec, targetRepoPath: deps.repoDir };
+
+  const startTime = Date.now();
+  const result = await runPlanner(plannerDeps, plannerInput);
+  const durationMs = Date.now() - startTime;
+
+  // Persist the planner result regardless of outcome — same rationale as
+  // the triage artifact write.
+  const runArtifactDir = join(deps.artifactsDir, run.id);
+  writePlannerArtifact(runArtifactDir, result, durationMs);
+
+  if (result.ok) {
+    const plan = {
+      runId: run.id,
+      specId: spec.id,
+      filesToTouch: result.plan.filesToTouch,
+      approach: result.plan.approach,
+      risks: result.plan.risks,
+      testStrategy: result.plan.testStrategy,
+      createdAt: deps.now(),
+    };
+    deps.store.insertPlan(plan);
+    writePlanArtifact(runArtifactDir, plan);
+
+    // Cross-phase budget check: planner usage was just recorded; the sum
+    // now includes triage + planner. If we've already blown the budget,
+    // fail at this phase instead of letting executor add more.
+    const afterPlanner = deps.store.getRun(run.id)!;
+    if (checkTokenBudget(deps, afterPlanner, spec)) {
+      return applyEvent(
+        deps.store,
+        run.id,
+        {
+          type: 'planning_failed',
+          failure: {
+            category: 'budget_exceeded',
+            message: `token budget exceeded after planning: ${afterPlanner.tokensSpent} > ${spec.budget.maxTokens}`,
+          },
+        },
+        deps.now(),
+      );
+    }
+
+    return applyEvent(
+      deps.store,
+      run.id,
+      { type: 'planning_succeeded' },
+      deps.now(),
+    );
+  }
+
+  // Rejection.
+  return applyEvent(
+    deps.store,
+    run.id,
+    {
+      type: 'planning_failed',
+      failure: {
+        category: mapPlannerRejectionToCategory(result.reason),
+        message: result.message,
+      },
+    },
+    deps.now(),
+  );
+}
+
+function mapPlannerRejectionToCategory(
+  reason: PlannerRejectionReason,
+): FailureCategory {
+  switch (reason) {
+    case 'unimplementable':
     case 'invalid_output':
       return 'spec_invalid';
     case 'sdk_error':
