@@ -131,9 +131,11 @@ export class Store {
       ),
       insertVerdict: db.prepare(
         `INSERT INTO verdicts
-          (run_id, pass, test_results_json, semantic_check_json, created_at)
+          (run_id, pass, test_results_json, semantic_check_json,
+           calibration_anchor_json, created_at)
          VALUES
-          (@run_id, @pass, @test_results_json, @semantic_check_json, @created_at)`,
+          (@run_id, @pass, @test_results_json, @semantic_check_json,
+           @calibration_anchor_json, @created_at)`,
       ),
       listEvents: db.prepare(
         'SELECT * FROM events WHERE run_id = ? ORDER BY id',

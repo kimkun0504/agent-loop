@@ -215,8 +215,47 @@ export interface Verdict {
   semanticCheck: {
     matches: boolean;
     reasoning: string;
+    /**
+     * Per-criterion judgment from the semantic verifier (Week 3+).
+     * Absent when the verifier is the legacy exit-code-only path
+     * or when an SDK error skipped the semantic step.
+     */
+    perCriterion?: PerCriterionJudgment[];
   };
+  /**
+   * Side-channel comparison against the deprecated shell testCommands.
+   * Set only during calibration runs (eval suite with --calibration-mode).
+   * Production runs never see this field. Tracks the
+   * gap-calibration-anchor-removal removal gate.
+   */
+  calibrationAnchor?: CalibrationAnchorResult;
   createdAt: string;
+}
+
+/**
+ * One per-criterion judgment from the semantic verifier. The criterion
+ * string is echoed verbatim from the spec's acceptanceCriteria; reasoning
+ * is the verifier's evidence (typically a hunk citation or a "no hunks
+ * touch path X" observation).
+ */
+export interface PerCriterionJudgment {
+  criterion: string;
+  met: boolean;
+  reasoning: string;
+}
+
+/**
+ * Result of running the calibration anchor's shell commands alongside
+ * the semantic verifier. Authority rule: the semantic verdict is
+ * authoritative for the run's pass/fail; the anchor produces signal
+ * only. Disagreement (anchor.anchorPass !== verdict.semanticCheck.matches)
+ * is warn-logged and surfaced in the eval report.
+ */
+export interface CalibrationAnchorResult {
+  commands: string[];
+  exitCodes: number[];
+  anchorPass: boolean;
+  agreement: boolean;
 }
 
 export interface TestResult {

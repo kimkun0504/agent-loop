@@ -16,6 +16,8 @@ import {
   type Spec,
   type Plan,
   type Verdict,
+  type CalibrationAnchorResult,
+  type PerCriterionJudgment,
   type Failure,
   type Budget,
   type PlannedFileChange,
@@ -182,6 +184,7 @@ export interface VerdictRow {
   pass: number; // 0 or 1; SQLite has no boolean
   test_results_json: string;
   semantic_check_json: string;
+  calibration_anchor_json: string | null;
   created_at: string;
 }
 
@@ -190,20 +193,28 @@ export interface VerdictInsertParams {
   pass: number;
   test_results_json: string;
   semantic_check_json: string;
+  calibration_anchor_json: string | null;
   created_at: string;
 }
 
 export function rowToVerdict(row: VerdictRow): Verdict {
-  return {
+  const verdict: Verdict = {
     runId: RunId(row.run_id),
     pass: row.pass === 1,
     testResults: JSON.parse(row.test_results_json) as TestResult[],
     semanticCheck: JSON.parse(row.semantic_check_json) as {
       matches: boolean;
       reasoning: string;
+      perCriterion?: PerCriterionJudgment[];
     },
     createdAt: row.created_at,
   };
+  if (row.calibration_anchor_json !== null) {
+    verdict.calibrationAnchor = JSON.parse(
+      row.calibration_anchor_json,
+    ) as CalibrationAnchorResult;
+  }
+  return verdict;
 }
 
 export function verdictToParams(verdict: Verdict): VerdictInsertParams {
@@ -212,6 +223,10 @@ export function verdictToParams(verdict: Verdict): VerdictInsertParams {
     pass: verdict.pass ? 1 : 0,
     test_results_json: JSON.stringify(verdict.testResults),
     semantic_check_json: JSON.stringify(verdict.semanticCheck),
+    calibration_anchor_json:
+      verdict.calibrationAnchor !== undefined
+        ? JSON.stringify(verdict.calibrationAnchor)
+        : null,
     created_at: verdict.createdAt,
   };
 }

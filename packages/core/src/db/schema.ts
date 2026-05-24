@@ -155,4 +155,17 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
     `,
   },
+  {
+    id: 5,
+    name: 'verdicts_calibration_anchor',
+    sql: `
+      -- Calibration anchor: side-channel comparison between the old shell
+      -- testCommands and the new semantic verifier. Set only during eval
+      -- runs with --calibration-mode; production runs leave this NULL.
+      -- Tracks the gap-calibration-anchor-removal removal gate (the field
+      -- + the calibrationTestCommands fixtures get deleted together when
+      -- the eval suite shows 0/M disagreements).
+      ALTER TABLE verdicts ADD COLUMN calibration_anchor_json TEXT;
+    `,
+  },
 ];

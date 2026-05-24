@@ -272,6 +272,92 @@ describe('Store: verdicts', () => {
     expect(back.pass).toBe(true);
     expect(typeof back.pass).toBe('boolean');
   });
+
+  it('round-trips semanticCheck.perCriterion when present', () => {
+    const v: Verdict = {
+      runId: RunId('run-1'),
+      pass: true,
+      testResults: [],
+      semanticCheck: {
+        matches: true,
+        reasoning: 'all met',
+        perCriterion: [
+          { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
+          { criterion: 'baz is qux', met: true, reasoning: 'ev2' },
+        ],
+      },
+      createdAt: NOW,
+    };
+    store.insertVerdict(v);
+    const back = store.listVerdicts(RunId('run-1'))[0]!;
+    expect(back.semanticCheck.perCriterion).toHaveLength(2);
+    expect(back.semanticCheck.perCriterion?.[0]?.criterion).toBe('foo is bar');
+  });
+
+  it('omits semanticCheck.perCriterion when absent (back-compat with old rows)', () => {
+    const v: Verdict = {
+      runId: RunId('run-1'),
+      pass: true,
+      testResults: [],
+      semanticCheck: { matches: true, reasoning: 'ok' },
+      createdAt: NOW,
+    };
+    store.insertVerdict(v);
+    const back = store.listVerdicts(RunId('run-1'))[0]!;
+    expect(back.semanticCheck.perCriterion).toBeUndefined();
+  });
+
+  it('round-trips calibrationAnchor when present', () => {
+    const v: Verdict = {
+      runId: RunId('run-1'),
+      pass: true,
+      testResults: [],
+      semanticCheck: { matches: true, reasoning: 'ok' },
+      calibrationAnchor: {
+        commands: ['! grep -r foo src/'],
+        exitCodes: [0],
+        anchorPass: true,
+        agreement: true,
+      },
+      createdAt: NOW,
+    };
+    store.insertVerdict(v);
+    const back = store.listVerdicts(RunId('run-1'))[0]!;
+    expect(back.calibrationAnchor).toEqual(v.calibrationAnchor);
+  });
+
+  it('leaves calibrationAnchor undefined when absent (production verdicts)', () => {
+    const v: Verdict = {
+      runId: RunId('run-1'),
+      pass: true,
+      testResults: [],
+      semanticCheck: { matches: true, reasoning: 'ok' },
+      createdAt: NOW,
+    };
+    store.insertVerdict(v);
+    const back = store.listVerdicts(RunId('run-1'))[0]!;
+    expect(back.calibrationAnchor).toBeUndefined();
+  });
+
+  it('records anchor disagreement (anchorPass !== verdict.pass)', () => {
+    const v: Verdict = {
+      runId: RunId('run-1'),
+      pass: false,
+      testResults: [],
+      semanticCheck: { matches: false, reasoning: 'criterion 2 unmet' },
+      calibrationAnchor: {
+        commands: ['! grep -r foo src/'],
+        exitCodes: [0],
+        anchorPass: true,
+        agreement: false,
+      },
+      createdAt: NOW,
+    };
+    store.insertVerdict(v);
+    const back = store.listVerdicts(RunId('run-1'))[0]!;
+    expect(back.calibrationAnchor?.agreement).toBe(false);
+    expect(back.pass).toBe(false);
+  });
 });
 
 describe('Store: events', () => {

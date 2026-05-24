@@ -143,4 +143,16 @@ describe('applyMigrations', () => {
     applyMigrations(db);
     expect(indexNames(db)).toContain('idx_tasks_source');
   });
+
+  it('verdicts.calibration_anchor_json column exists and is nullable after migration #5', () => {
+    const db = freshDb();
+    applyMigrations(db);
+    const cols = db.prepare('PRAGMA table_info(verdicts)').all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const col = cols.find((c) => c.name === 'calibration_anchor_json');
+    expect(col).toBeDefined();
+    expect(col?.notnull).toBe(0);
+  });
 });
