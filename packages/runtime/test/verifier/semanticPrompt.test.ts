@@ -72,7 +72,7 @@ describe('buildSemanticRetryUserPrompt', () => {
     const out = buildSemanticRetryUserPrompt('original prompt body', [
       'perCriterion[0].met: missing or not a boolean',
       'criterion 2 not echoed verbatim',
-    ]);
+    ], 5);
     expect(out).toContain('original prompt body');
     expect(out).toContain('# Your previous response had validation errors');
     expect(out).toContain('- perCriterion[0].met: missing or not a boolean');
@@ -80,8 +80,31 @@ describe('buildSemanticRetryUserPrompt', () => {
   });
 
   it('reiterates the verbatim-echo instruction in the retry', () => {
-    const out = buildSemanticRetryUserPrompt('p', ['e']);
+    const out = buildSemanticRetryUserPrompt('p', ['e'], 3);
     expect(out).toContain('Echo each criterion string verbatim');
     expect(out).toContain('do not paraphrase');
+  });
+
+  it('includes the expected-shape reminder ("perCriterion must be an ARRAY")', () => {
+    const out = buildSemanticRetryUserPrompt('p', ['perCriterion is not an array'], 7);
+    expect(out).toContain('perCriterion');
+    expect(out).toMatch(/must be an ARRAY/);
+    expect(out).toMatch(/Do not produce an object keyed by criterion text/);
+    expect(out).toMatch(/do not wrap the array in another container/);
+    expect(out).toMatch(/do not stringify the array/);
+  });
+
+  it('includes a shape example showing the array of objects', () => {
+    const out = buildSemanticRetryUserPrompt('p', ['e'], 3);
+    expect(out).toContain('"perCriterion": [');
+    expect(out).toContain('"criterion"');
+    expect(out).toContain('"met"');
+    expect(out).toContain('"reasoning"');
+  });
+
+  it('reminds the model of the expected criteria count', () => {
+    const out = buildSemanticRetryUserPrompt('p', ['e'], 7);
+    expect(out).toMatch(/Recall the 7 criteria/);
+    expect(out).toMatch(/Produce exactly 7 entries/);
   });
 });

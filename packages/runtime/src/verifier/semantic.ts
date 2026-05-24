@@ -37,6 +37,8 @@ import {
   SEMANTIC_INPUT_SCHEMA,
   SEMANTIC_TOOL_NAME,
   type PerCriterionJudgment,
+  type SemanticDebug,
+  type SemanticDebugCall,
 } from './semanticSchema.js';
 import {
   SEMANTIC_SYSTEM_PROMPT,
@@ -81,12 +83,25 @@ export type SemanticVerifierResult =
       perCriterion: ReadonlyArray<PerCriterionJudgment>;
       usages: TokenUsage[];
       diffTruncated: boolean;
+      /**
+       * Present iff call 1 failed validation and call 2 succeeded.
+       * Captures the raw output so we can see what shape call 1 produced
+       * and confirm the retry-feedback fix worked. Absent on clean
+       * happy-path (call 1 succeeded).
+       */
+      debug?: SemanticDebug;
     }
   | {
       ok: false;
       reason: 'sdk_error' | 'invalid_output' | 'skipped';
       message: string;
       usages: TokenUsage[];
+      /**
+       * Present iff reason === 'invalid_output' (both calls failed
+       * validation). Absent on sdk_error and skipped — those have no
+       * model output to capture.
+       */
+      debug?: SemanticDebug;
     };
 
 export async function runSemanticVerifier(
@@ -108,6 +123,7 @@ export async function runSemanticVerifier(
   });
 
   const usages: TokenUsage[] = [];
+  const debugCalls: SemanticDebugCall[] = [];
 
   const call1 = await callSemanticOnce(deps, model, userPrompt);
   if ('error' in call1) {
@@ -123,18 +139,36 @@ export async function runSemanticVerifier(
     input.acceptanceCriteria,
   );
   if ('payload' in validated1) {
+    // Happy path: call 1 valid, no retry, no debug artifact.
     return shapeOk(validated1.payload.perCriterion, usages, truncated);
   }
+
+  // Call 1 failed validation. Capture the raw output for the debug artifact;
+  // we'll surface it whether or not call 2 succeeds.
+  debugCalls.push({
+    userPrompt,
+    rawToolInput: call1.toolInput,
+    validatorErrors: [...validated1.errors],
+  });
 
   deps.logger?.warn('semantic-verifier: call 1 invalid; retrying with feedback', {
     errors: validated1.errors,
   });
-  const retryPrompt = buildSemanticRetryUserPrompt(userPrompt, validated1.errors);
+  const retryPrompt = buildSemanticRetryUserPrompt(
+    userPrompt,
+    validated1.errors,
+    input.acceptanceCriteria.length,
+  );
   const call2 = await callSemanticOnce(deps, model, retryPrompt);
   if ('error' in call2) {
     deps.logger?.error('semantic-verifier: SDK error on call 2', {
       err: call2.error,
     });
+    // SDK error on call 2 — we have debug data from call 1 but no call 2
+    // output to capture. The sdk_error path doesn't carry debug (per the
+    // type), but the call 1 raw output is still in the logger context
+    // for now. (Persisting debug across SDK errors is a future polish if
+    // we find ourselves needing it.)
     return sdkErrorResult(call2.error, onSdkError, usages, deps.logger);
   }
   usages.push(call2.usage);
@@ -144,9 +178,33 @@ export async function runSemanticVerifier(
     input.acceptanceCriteria,
   );
   if ('payload' in validated2) {
-    return shapeOk(validated2.payload.perCriterion, usages, truncated);
+    // Call 2 succeeded after call 1 failed: capture call 2 (no errors)
+    // and return ok with the debug artifact attached so we can see what
+    // shape the retry produced.
+    debugCalls.push({
+      userPrompt: retryPrompt,
+      rawToolInput: call2.toolInput,
+    });
+    const result = shapeOk(validated2.payload.perCriterion, usages, truncated);
+    if (result.ok) {
+      return {
+        ...result,
+        debug: {
+          systemPrompt: SEMANTIC_SYSTEM_PROMPT,
+          calls: debugCalls,
+          finalOutcome: 'ok',
+        },
+      };
+    }
+    return result;
   }
 
+  // Both calls failed validation.
+  debugCalls.push({
+    userPrompt: retryPrompt,
+    rawToolInput: call2.toolInput,
+    validatorErrors: [...validated2.errors],
+  });
   deps.logger?.error('semantic-verifier: call 2 also invalid; giving up', {
     errors: validated2.errors,
   });
@@ -155,6 +213,11 @@ export async function runSemanticVerifier(
     reason: 'invalid_output',
     message: `semantic verifier produced invalid output twice: ${validated2.errors.join('; ')}`,
     usages,
+    debug: {
+      systemPrompt: SEMANTIC_SYSTEM_PROMPT,
+      calls: debugCalls,
+      finalOutcome: 'invalid_output',
+    },
   };
 }
 

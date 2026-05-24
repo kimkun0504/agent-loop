@@ -19,6 +19,8 @@ import {
 import {
   writeExecutorArtifacts,
   writeVerdictArtifact,
+  writeSemanticDebugArtifact,
+  type SemanticDebugArtifactJson,
   writeMetaArtifact,
   ARTIFACT_SCHEMA_VERSION,
   type ExecutorArtifactJson,
@@ -193,6 +195,62 @@ describe('writeVerdictArtifact', () => {
     expect(log).toContain('exit 1, 800ms');
     expect(log).toContain('lint ok');
     expect(log).toContain('test fail');
+  });
+});
+
+describe('writeSemanticDebugArtifact', () => {
+  it('writes verdict-NNN.semantic-debug.json with schemaVersion + debug payload', () => {
+    const dir = join(root, 'run-1');
+    writeSemanticDebugArtifact(
+      dir,
+      {
+        systemPrompt: 'mock system prompt',
+        finalOutcome: 'invalid_output',
+        calls: [
+          {
+            userPrompt: 'call 1 prompt',
+            rawToolInput: { perCriterion: { keyed: 'by criterion' } },
+            validatorErrors: ['perCriterion is not an array'],
+          },
+          {
+            userPrompt: 'call 2 retry prompt',
+            rawToolInput: { perCriterion: 'still wrong' },
+            validatorErrors: ['perCriterion is not an array'],
+          },
+        ],
+      },
+      1,
+    );
+    const parsed = readJson<SemanticDebugArtifactJson>(
+      join(dir, 'verdict-001.semantic-debug.json'),
+    );
+    expect(parsed.schemaVersion).toBe(ARTIFACT_SCHEMA_VERSION);
+    expect(parsed.debug.systemPrompt).toBe('mock system prompt');
+    expect(parsed.debug.finalOutcome).toBe('invalid_output');
+    expect(parsed.debug.calls).toHaveLength(2);
+    expect(parsed.debug.calls[0]?.rawToolInput).toEqual({
+      perCriterion: { keyed: 'by criterion' },
+    });
+    expect(parsed.debug.calls[0]?.validatorErrors).toEqual([
+      'perCriterion is not an array',
+    ]);
+  });
+
+  it('zero-pads the index in the filename', () => {
+    const dir = join(root, 'run-1');
+    writeSemanticDebugArtifact(
+      dir,
+      {
+        systemPrompt: 's',
+        finalOutcome: 'ok',
+        calls: [
+          { userPrompt: 'p', rawToolInput: { perCriterion: [] }, validatorErrors: ['e'] },
+          { userPrompt: 'r', rawToolInput: { perCriterion: [] } },
+        ],
+      },
+      7,
+    );
+    expect(existsSync(join(dir, 'verdict-007.semantic-debug.json'))).toBe(true);
   });
 });
 

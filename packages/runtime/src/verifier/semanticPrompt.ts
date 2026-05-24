@@ -109,6 +109,7 @@ Call submit_verdict, judging each criterion independently. Echo each criterion s
 export function buildSemanticRetryUserPrompt(
   originalUserPrompt: string,
   validatorErrors: ReadonlyArray<string>,
+  criteriaCount: number,
 ): string {
   return `${originalUserPrompt}
 
@@ -118,5 +119,18 @@ You called \`submit_verdict\` but the input did not satisfy the requirements:
 
 ${validatorErrors.map((e) => `- ${e}`).join('\n')}
 
-Call \`submit_verdict\` again with corrected input. Echo each criterion string verbatim; do not paraphrase, do not normalize. Do not explain — just call the tool.`;
+# Correct shape
+
+\`perCriterion\` must be an ARRAY of objects, each with \`criterion\`, \`met\`, and \`reasoning\` fields. Do not produce an object keyed by criterion text; do not wrap the array in another container; do not stringify the array. The shape is:
+
+\`\`\`
+{
+  "perCriterion": [
+    { "criterion": "<verbatim criterion text>", "met": true|false, "reasoning": "<one-to-three sentences>" },
+    ...
+  ]
+}
+\`\`\`
+
+Recall the ${criteriaCount} criteria listed in the "# Acceptance criteria" section above. Produce exactly ${criteriaCount} entries in \`perCriterion\`, one per criterion, in any order. Echo each criterion string verbatim; do not paraphrase, do not normalize. Do not explain — just call the tool.`;
 }

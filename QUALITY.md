@@ -48,6 +48,7 @@ When something goes wrong, you must be able to explain why.
 | Cost per run is reported | 100% of completed runs report nonzero `tokensSpent` and `secondsSpent` | Eval suite assertion |
 | Stuck runs are detectable | A run in a non-terminal phase for > `budget.maxSeconds * 1.5` triggers a warn-level log | Loop tick logic |
 | Failures include category and phase | 100% of `failed` runs have `failure.category` and `failure.phase` populated | Eval suite assertion on failure cases |
+| Semantic verifier failure post-mortem | 100% — every semantic verifier failure produces an artifact containing the model's raw tool input | `<artifactDir>/<runId>/verdict-NNN.semantic-debug.json` written by `tickVerifying` when the verifier reports a validation failure; test in `packages/runtime/test/orchestrator/tick.test.ts` |
 
 ## Tier 4: Safety
 

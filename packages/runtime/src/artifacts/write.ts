@@ -25,6 +25,7 @@ import type { Run, Spec, Verdict, Failure, Plan } from '@agent-loop/core';
 import type { ExecutorResult } from '../executor/types.js';
 import type { PlannerResult } from '../agents/plannerSchema.js';
 import type { TriageResult } from '../agents/triageSchema.js';
+import type { SemanticDebug } from '../verifier/semanticSchema.js';
 
 export const ARTIFACT_SCHEMA_VERSION = 1;
 
@@ -75,6 +76,40 @@ export interface VerdictArtifactJson {
 }
 
 const VERDICT_INDEX_WIDTH = 3;
+
+// --- Semantic verifier debug ----------------------------------------------
+
+export interface SemanticDebugArtifactJson {
+  schemaVersion: 1;
+  debug: SemanticDebug;
+}
+
+/**
+ * Write `verdict-NNN.semantic-debug.json` capturing the raw model output(s)
+ * from the semantic verifier when at least one call failed validation.
+ *
+ * Called by the orchestrator when the verifier returns a non-undefined
+ * debug payload. Closes BACKLOG#polish-semantic-verifier-raw-output-capture
+ * (the original CP3 re-run discovered the gap and we had no way to
+ * distinguish "model produced an object keyed by criterion" from
+ * "model produced a wrapped array" from "response was truncated").
+ */
+export function writeSemanticDebugArtifact(
+  runArtifactDir: string,
+  debug: SemanticDebug,
+  index: number,
+): void {
+  mkdirSync(runArtifactDir, { recursive: true });
+  const padded = String(index).padStart(VERDICT_INDEX_WIDTH, '0');
+  const json: SemanticDebugArtifactJson = {
+    schemaVersion: ARTIFACT_SCHEMA_VERSION,
+    debug,
+  };
+  writeFileSync(
+    join(runArtifactDir, `verdict-${padded}.semantic-debug.json`),
+    JSON.stringify(json, null, 2) + '\n',
+  );
+}
 
 /**
  * Write `verdict-NNN.json` (full Verdict object) and `verdict-NNN.log`

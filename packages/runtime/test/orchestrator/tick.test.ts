@@ -1138,6 +1138,58 @@ describe('tick: verifying phase', () => {
     expect(v.semanticCheck.perCriterion).toHaveLength(2);
     expect(v.semanticCheck.perCriterion?.[0]?.criterion).toBe('foo is bar');
   });
+
+  it('writes verdict-001.semantic-debug.json when verifier returns semanticDebug', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying');
+    const verifier: Verifier = async (r) => ({
+      verdict: {
+        runId: r.id,
+        pass: false,
+        testResults: [],
+        semanticCheck: {
+          matches: false,
+          reasoning: 'semantic verifier failed (invalid_output): ...',
+        },
+        createdAt: NOW,
+      },
+      usages: [],
+      semanticDebug: {
+        systemPrompt: 'mock system prompt',
+        finalOutcome: 'invalid_output',
+        calls: [
+          {
+            userPrompt: 'call 1',
+            rawToolInput: { perCriterion: { keyed: 'wrong shape' } },
+            validatorErrors: ['perCriterion is not an array'],
+          },
+          {
+            userPrompt: 'call 2 retry',
+            rawToolInput: { perCriterion: 'still wrong' },
+            validatorErrors: ['perCriterion is not an array'],
+          },
+        ],
+      },
+    });
+    await tick(makeDeps(store, { verifier }), run);
+    const debugPath = join(artifactsDir, run.id, 'verdict-001.semantic-debug.json');
+    expect(existsSync(debugPath)).toBe(true);
+    const parsed = JSON.parse(readFileSync(debugPath, 'utf8'));
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.debug.finalOutcome).toBe('invalid_output');
+    expect(parsed.debug.calls).toHaveLength(2);
+  });
+
+  it('does NOT write verdict-001.semantic-debug.json on clean happy-path (no semanticDebug)', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying');
+    // Default makeDeps verifier returns no semanticDebug.
+    await tick(makeDeps(store), run);
+    const debugPath = join(artifactsDir, run.id, 'verdict-001.semantic-debug.json');
+    expect(existsSync(debugPath)).toBe(false);
+    // But the regular verdict-001.json IS written.
+    expect(existsSync(join(artifactsDir, run.id, 'verdict-001.json'))).toBe(true);
+  });
 });
 
 describe('tick: opening_pr phase', () => {

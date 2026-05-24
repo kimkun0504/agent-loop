@@ -50,6 +50,7 @@ import {
   writeTriageArtifact,
   writePlannerArtifact,
   writePlanArtifact,
+  writeSemanticDebugArtifact,
 } from '../artifacts/write.js';
 import type { AnthropicClient } from '../agents/sdkClient.js';
 import {
@@ -75,12 +76,21 @@ import { applyEvent } from './apply.js';
  * composer) which always returns at least usages=[] for the exit-code
  * path. Test stubs can return usages=[] when they don't model token
  * accounting.
+ *
+ * `semanticDebug` is set when the semantic verifier hit at least one
+ * validation failure. Caller persists it as
+ * verdict-NNN.semantic-debug.json. Closes
+ * BACKLOG#polish-semantic-verifier-raw-output-capture.
  */
 export type Verifier = (
   run: Run,
   spec: Spec,
   options: VerifyOptions,
-) => Promise<{ verdict: Verdict; usages: TokenUsage[] }>;
+) => Promise<{
+  verdict: Verdict;
+  usages: TokenUsage[];
+  semanticDebug?: import('../verifier/semanticSchema.js').SemanticDebug;
+}>;
 
 export interface Deps {
   store: Store;
@@ -299,11 +309,12 @@ async function tickVerifying(deps: Deps, run: Run): Promise<Run> {
   }
 
   const worktreePath = worktreePathFor(deps, run.id);
-  const { verdict, usages } = await deps.verifier(run, spec, {
+  const verifyResult = await deps.verifier(run, spec, {
     cwd: worktreePath,
     logger: deps.logger,
     now: deps.now,
   });
+  const { verdict, usages } = verifyResult;
 
   // Apply token-usage events from the semantic verifier (Path A).
   // The verifier returns usages: TokenUsage[]; the orchestrator owns the
@@ -352,7 +363,17 @@ async function tickVerifying(deps: Deps, run: Run): Promise<Run> {
   // Persist the verdict alongside the executor transcript. Index = current
   // count after insert (1-based) so the first verdict is verdict-001.
   const verdictIndex = deps.store.listVerdicts(run.id).length;
-  writeVerdictArtifact(join(deps.artifactsDir, run.id), verdict, verdictIndex);
+  const artifactDir = join(deps.artifactsDir, run.id);
+  writeVerdictArtifact(artifactDir, verdict, verdictIndex);
+  // Semantic verifier debug artifact — written only when at least one call
+  // failed validation. Captures raw model output for post-mortem inspection.
+  if (verifyResult.semanticDebug !== undefined) {
+    writeSemanticDebugArtifact(
+      artifactDir,
+      verifyResult.semanticDebug,
+      verdictIndex,
+    );
+  }
 
   if (verdict.pass) {
     return applyEvent(

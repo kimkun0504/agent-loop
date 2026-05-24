@@ -20,6 +20,37 @@ export interface SemanticVerdictPayload {
   readonly perCriterion: ReadonlyArray<PerCriterionJudgment>;
 }
 
+/**
+ * Debug artifact written when the semantic verifier hits at least one
+ * validation failure (call 1 invalid → retry, regardless of retry outcome).
+ *
+ * Captures the raw model output before validation so a human reviewing the
+ * artifact can see exactly what shape the model produced and why the
+ * validator rejected it. Without this, "perCriterion is not an array"
+ * is opaque — we'd have to guess between "object keyed by criterion",
+ * "wrapped array", "stringified JSON", or "truncated response".
+ *
+ * Successful runs (call 1 valid, no retry) do NOT produce this artifact;
+ * the parsed perCriterion already lives on verdict-NNN.json.
+ *
+ * SDK errors (no tool_use response at all) do NOT produce this artifact;
+ * there's no model output to capture.
+ */
+export interface SemanticDebugCall {
+  /** The user prompt sent on this call. Call 1 is the original; call 2 is the retry with validator-error feedback inlined. */
+  readonly userPrompt: string;
+  /** The literal `input` from the model's tool_use block. Whatever it produced, before our validator parsed it. */
+  readonly rawToolInput: unknown;
+  /** Validator complaints. Present iff this call failed validation. Absent for the call that ultimately produced a valid result. */
+  readonly validatorErrors?: ReadonlyArray<string>;
+}
+
+export interface SemanticDebug {
+  readonly systemPrompt: string;
+  readonly calls: ReadonlyArray<SemanticDebugCall>;
+  readonly finalOutcome: 'ok' | 'invalid_output';
+}
+
 export const SEMANTIC_INPUT_SCHEMA = {
   type: 'object',
   properties: {

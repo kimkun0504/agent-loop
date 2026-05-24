@@ -33,6 +33,7 @@ import {
   runSemanticVerifier,
   type SemanticOnSdkError,
 } from './semantic.js';
+import type { SemanticDebug } from './semanticSchema.js';
 import type { AnthropicClient } from '../agents/sdkClient.js';
 import { getDiffSinceBase, type DiffRunner } from '../git/diff.js';
 import {
@@ -85,6 +86,14 @@ export interface RunVerifierResult {
    * The caller (tickVerifying) applies record_token_usage events.
    */
   usages: TokenUsage[];
+  /**
+   * Debug payload from the semantic verifier when at least one
+   * validation failure occurred (call 1 invalid, regardless of call 2).
+   * Caller persists it as verdict-NNN.semantic-debug.json so we can
+   * inspect what shape the model produced and why the validator
+   * rejected it. Absent on clean happy-path runs.
+   */
+  semanticDebug?: SemanticDebug;
 }
 
 export async function runVerifier(
@@ -206,7 +215,7 @@ export async function runVerifier(
         reasoning: `semantic verifier failed (${semantic.reason}): ${semantic.message}`,
       },
     };
-    return {
+    const result: RunVerifierResult = {
       verdict: await maybeAttachAnchor(
         failed,
         { exitCodePass: true, semanticMatches: false },
@@ -214,6 +223,8 @@ export async function runVerifier(
       ),
       usages: semantic.usages,
     };
+    if (semantic.debug !== undefined) result.semanticDebug = semantic.debug;
+    return result;
   }
 
   const composed: Verdict = {
@@ -229,7 +240,7 @@ export async function runVerifier(
       })),
     },
   };
-  return {
+  const result: RunVerifierResult = {
     verdict: await maybeAttachAnchor(
       composed,
       { exitCodePass: exitVerdict.pass, semanticMatches: semantic.matches },
@@ -237,6 +248,8 @@ export async function runVerifier(
     ),
     usages: semantic.usages,
   };
+  if (semantic.debug !== undefined) result.semanticDebug = semantic.debug;
+  return result;
 }
 
 async function maybeAttachAnchor(
