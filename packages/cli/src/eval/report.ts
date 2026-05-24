@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { execa } from 'execa';
 import { join } from 'node:path';
 import { aggregateResults } from './metrics.js';
+import { formatPerPhaseCost, instrument } from './instrumentation.js';
 import type { EvalSummary, EvalTaskResult } from './types.js';
 
 const SUMMARY_SCHEMA_VERSION = 1;
@@ -19,6 +20,8 @@ export async function writeResults(
   results: ReadonlyArray<EvalTaskResult>,
 ): Promise<EvalSummary> {
   mkdirSync(resultsDir, { recursive: true });
+
+  const instrumentation = instrument(resultsDir, results);
 
   const summary: EvalSummary = {
     timestamp: new Date().toISOString(),
@@ -30,6 +33,14 @@ export async function writeResults(
     perTask: [...results],
     aggregates: aggregateResults(results),
   };
+  // Only populate when there's planner output to talk about — keeps
+  // baseline-mode summaries free of zero-padded planner fields.
+  if (instrumentation.plannerSignals.withPlannerOutput > 0) {
+    summary.plannerSignals = instrumentation.plannerSignals;
+  }
+  if (instrumentation.planQualityMismatches.length > 0) {
+    summary.planQualityMismatches = instrumentation.planQualityMismatches;
+  }
 
   // schemaVersion is added under the same _schemaVersion key used by other
   // artifacts in the project (executor.json, meta.json, etc.). Keeping the
@@ -83,5 +94,48 @@ function formatReportMd(s: EvalSummary): string {
   lines.push(`- p95 cost: $${s.aggregates.p95CostUsd.toFixed(4)}`);
   lines.push(`- p50 cache hit rate: ${(s.aggregates.p50CacheHitRate * 100).toFixed(0)}%`);
   lines.push('');
+
+  // CHECKPOINT 3 sections (only when planner ran).
+  if (s.plannerSignals) {
+    lines.push('## Planner signals (CHECKPOINT 3)');
+    lines.push('');
+    lines.push(
+      `**Context-seeking rate: ${(s.plannerSignals.contextSeekingRate * 100).toFixed(0)}%** (${s.plannerSignals.contextSeekingCount} of ${s.plannerSignals.withPlannerOutput} planner outputs contained "need to see", "depends on", or similar phrasing — re-prioritization signal for gap-triage-thin-context).`,
+    );
+    lines.push('');
+    if (s.plannerSignals.perTask.length > 0) {
+      lines.push('| Task | Context-seeking? | Matched phrases |');
+      lines.push('|---|---|---|');
+      for (const t of s.plannerSignals.perTask) {
+        const flag = t.contextSeeking ? 'yes' : 'no';
+        const phrases = t.matchedPhrases.length > 0 ? t.matchedPhrases.join(', ') : '—';
+        lines.push(`| \`${t.name}\` | ${flag} | ${phrases} |`);
+      }
+      lines.push('');
+    }
+  }
+
+  if (s.planQualityMismatches && s.planQualityMismatches.length > 0) {
+    lines.push('## Plan-quality mismatches');
+    lines.push('');
+    lines.push(
+      `Runs where the planner produced a plan but the run failed downstream. These are the most interesting failures to inspect — good spec, plan written, executor or verifier rejected.`,
+    );
+    lines.push('');
+    for (const m of s.planQualityMismatches) {
+      lines.push(`- \`${m.name}\`: failed at ${m.failedPhase} with [${m.failureCategory}]`);
+    }
+    lines.push('');
+  }
+
+  // Per-phase cost breakdown for the first passing task (when one exists).
+  const sampleTask = s.perTask.find((t) => t.passed);
+  if (sampleTask) {
+    lines.push('## Sample per-phase cost (one passing task)');
+    lines.push('');
+    lines.push(formatPerPhaseCost(sampleTask));
+    lines.push('');
+  }
+
   return lines.join('\n');
 }

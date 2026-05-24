@@ -1,0 +1,16 @@
+{
+  "acceptanceCriteria": [
+    "src/utils/parse.js exists and exports parseUrl",
+    "src/utils/format.js exists and exports formatUrl",
+    "src/utils.js no longer exists",
+    "src/api.js imports parseUrl from src/utils/parse.js and formatUrl from src/utils/format.js",
+    "test/utils.test.js imports from the new locations",
+    "all tests pass"
+  ],
+  "testCommands": [
+    "npm test",
+    "test ! -f src/utils.js",
+    "test -f src/utils/parse.js",
+    "test -f src/utils/format.js"
+  ]
+}

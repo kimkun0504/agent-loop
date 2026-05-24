@@ -1,0 +1,1 @@
+Split `src/utils.js` into two files: `src/utils/parse.js` (with `parseUrl`) and `src/utils/format.js` (with `formatUrl`). Update the importers in `src/api.js` and `test/utils.test.js` to import from the new locations. The original `src/utils.js` should no longer exist after the split. All existing tests must still pass.

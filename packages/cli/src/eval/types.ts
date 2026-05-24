@@ -69,4 +69,20 @@ export interface EvalSummary {
     medianCostUsd: number;
     p50CacheHitRate: number;
   };
+  /**
+   * CHECKPOINT 3 instrumentation. Populated when planner outputs are
+   * present on disk; absent otherwise (baseline runs have no planner
+   * artifacts). See eval/instrumentation.ts.
+   */
+  plannerSignals?: {
+    withPlannerOutput: number;
+    contextSeekingCount: number;
+    contextSeekingRate: number;
+    perTask: Array<{ name: string; contextSeeking: boolean; matchedPhrases: string[] }>;
+  };
+  planQualityMismatches?: Array<{
+    name: string;
+    failedPhase: string;
+    failureCategory: string;
+  }>;
 }
