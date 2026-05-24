@@ -89,9 +89,10 @@ function freshStore(): Store {
 function seedRunAndSpec(
   store: Store,
   phase: Run['phase'],
-  overrides: Partial<Run> = {},
+  overrides: Partial<Run> & { specOverrides?: Partial<Spec> } = {},
 ): { run: Run; spec: Spec } {
   const id = freshRunId();
+  const { specOverrides, ...runOverrides } = overrides;
   const run: Run = {
     id: RunId(id),
     taskId: TaskId('task-1'),
@@ -104,7 +105,7 @@ function seedRunAndSpec(
     attemptCount: 0,
     tokensSpent: 0,
     secondsSpent: 0,
-    ...overrides,
+    ...runOverrides,
   };
   store.insertRun(run);
   const spec: Spec = {
@@ -117,6 +118,7 @@ function seedRunAndSpec(
     testCommands: ['true'],
     budget: DEFAULT_BUDGET,
     createdAt: NOW,
+    ...specOverrides,
   };
   store.insertSpec(spec);
   return { run, spec };
@@ -152,7 +154,10 @@ const stubExecutorThatEditsFile = (
 
 const stubVerifier =
   (verdict: Omit<Verdict, 'runId'>): Verifier =>
-  async (run) => ({ ...verdict, runId: run.id });
+  async (run) => ({
+    verdict: { ...verdict, runId: run.id },
+    usages: [],
+  });
 
 const stubPrOpener = (result: PrOpenResult): PrOpener => ({
   openPullRequest: async () => result,
@@ -1050,6 +1055,88 @@ describe('tick: verifying phase', () => {
     const after = await tick(makeDeps(store), run);
     expect(after.phase).toBe('failed');
     expect(after.failure?.category).toBe('internal');
+  });
+
+  it('applies record_token_usage events from verifier usages', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying');
+    const verifierWithUsage: Verifier = async (r) => ({
+      verdict: {
+        runId: r.id,
+        pass: true,
+        testResults: [],
+        semanticCheck: { matches: true, reasoning: 'ok', perCriterion: [] },
+        createdAt: NOW,
+      },
+      usages: [
+        { inputTokens: 1000, outputTokens: 200, costUsd: 0.0045 },
+      ],
+    });
+    const deps = makeDeps(store, { verifier: verifierWithUsage });
+    await tick(deps, run);
+    const tokens = store
+      .listEvents(run.id)
+      .filter((e) => e.event.type === 'record_token_usage');
+    expect(tokens.length).toBeGreaterThanOrEqual(1);
+    const verifierToken = tokens.at(-1)!;
+    if (verifierToken.event.type === 'record_token_usage') {
+      expect(verifierToken.event.tokens).toBe(1200);
+      expect(verifierToken.event.usage?.costUsd).toBe(0.0045);
+    }
+  });
+
+  it('fails verification with category=budget_exceeded when verifier usages push tokens over budget', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying', {
+      specOverrides: {
+        budget: { maxSeconds: 60, maxTokens: 500, maxCostUsd: 1 },
+      },
+    });
+    const verifierOverBudget: Verifier = async (r) => ({
+      verdict: {
+        runId: r.id,
+        pass: true,
+        testResults: [],
+        semanticCheck: { matches: true, reasoning: 'ok', perCriterion: [] },
+        createdAt: NOW,
+      },
+      usages: [
+        { inputTokens: 600, outputTokens: 100 },
+      ],
+    });
+    const deps = makeDeps(store, { verifier: verifierOverBudget });
+    const after = await tick(deps, run);
+    expect(after.phase).toBe('failed');
+    expect(after.failure?.category).toBe('budget_exceeded');
+    // The verdict is NOT persisted when budget enforcement fires.
+    expect(store.listVerdicts(run.id)).toHaveLength(0);
+  });
+
+  it('propagates perCriterion onto the persisted verdict when verifier emits it', async () => {
+    const store = freshStore();
+    const { run } = seedRunAndSpec(store, 'verifying');
+    const semanticVerifier: Verifier = async (r) => ({
+      verdict: {
+        runId: r.id,
+        pass: true,
+        testResults: [],
+        semanticCheck: {
+          matches: true,
+          reasoning: '2/2 acceptance criteria met',
+          perCriterion: [
+            { criterion: 'foo is bar', met: true, reasoning: 'r1' },
+            { criterion: 'baz is qux', met: true, reasoning: 'r2' },
+          ],
+        },
+        createdAt: NOW,
+      },
+      usages: [],
+    });
+    const deps = makeDeps(store, { verifier: semanticVerifier });
+    await tick(deps, run);
+    const v = store.listVerdicts(run.id)[0]!;
+    expect(v.semanticCheck.perCriterion).toHaveLength(2);
+    expect(v.semanticCheck.perCriterion?.[0]?.criterion).toBe('foo is bar');
   });
 });
 

@@ -125,11 +125,14 @@ const okExecutor: Executor = {
 };
 
 const okVerifier: Verifier = async (run) => ({
-  runId: run.id,
-  pass: true,
-  testResults: [],
-  semanticCheck: { matches: true, reasoning: 'stub' },
-  createdAt: NOW,
+  verdict: {
+    runId: run.id,
+    pass: true,
+    testResults: [],
+    semanticCheck: { matches: true, reasoning: 'stub' },
+    createdAt: NOW,
+  },
+  usages: [],
 });
 
 const okPrOpener: PrOpener = {

@@ -37,7 +37,7 @@ import {
   openDb,
   applyEvent,
   runCommand,
-  runExitCodeVerifier,
+  runVerifier,
   ClaudeCliExecutor,
   GhPrOpener,
   tick,
@@ -114,7 +114,12 @@ export async function start(opts: StartOptions): Promise<number> {
     repoDir: target,
     now,
     executor: new ClaudeCliExecutor(),
-    verifier: runExitCodeVerifier,
+    // No Anthropic client wired in production start path yet — the
+    // composer's no-client branch returns an exit-code-only verdict
+    // with an explanatory reasoning string. Adding semantic
+    // verification to the production CLI is a follow-up; eval drive
+    // is the path that exercises it for CHECKPOINT 3.
+    verifier: runVerifier,
     // GhPrOpener returns the URL on success; tick.ts threads it into the
     // pr_opened event payload, and the transition handler sets Run.prUrl.
     // No closure capture needed — read final.prUrl after the loop.

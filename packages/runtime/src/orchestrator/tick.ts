@@ -31,6 +31,7 @@ import {
   type Verdict,
   type Failure,
   type FailureCategory,
+  type TokenUsage,
   DEFAULT_BUDGET,
   SpecId,
   isTerminal,
@@ -65,11 +66,21 @@ import {
 import type { PlannerRejectionReason } from '../agents/plannerSchema.js';
 import { applyEvent } from './apply.js';
 
+/**
+ * Verifier callback: produces a Verdict + the token usages it consumed.
+ * tickVerifying applies record_token_usage events for each entry and
+ * runs the cross-phase budget check after. Path A in the design.
+ *
+ * Production wiring passes `runVerifier` (the exit-code + semantic
+ * composer) which always returns at least usages=[] for the exit-code
+ * path. Test stubs can return usages=[] when they don't model token
+ * accounting.
+ */
 export type Verifier = (
   run: Run,
   spec: Spec,
   options: VerifyOptions,
-) => Promise<Verdict>;
+) => Promise<{ verdict: Verdict; usages: TokenUsage[] }>;
 
 export interface Deps {
   store: Store;
@@ -288,11 +299,54 @@ async function tickVerifying(deps: Deps, run: Run): Promise<Run> {
   }
 
   const worktreePath = worktreePathFor(deps, run.id);
-  const verdict = await deps.verifier(run, spec, {
+  const { verdict, usages } = await deps.verifier(run, spec, {
     cwd: worktreePath,
     logger: deps.logger,
     now: deps.now,
   });
+
+  // Apply token-usage events from the semantic verifier (Path A).
+  // The verifier returns usages: TokenUsage[]; the orchestrator owns the
+  // event-application + budget-check. usages is empty when semantic was
+  // skipped (exit-code fail, no client, no criteria).
+  for (const usage of usages) {
+    applyEvent(
+      deps.store,
+      run.id,
+      {
+        type: 'record_token_usage',
+        tokens:
+          usage.inputTokens +
+          usage.outputTokens +
+          (usage.cacheReadInputTokens ?? 0) +
+          (usage.cacheCreationInputTokens ?? 0),
+        usage,
+      },
+      deps.now(),
+    );
+  }
+
+  // Cross-phase budget check after this phase's contribution lands.
+  // Symmetric with tickPlanning. Over budget → verification_failed with
+  // category budget_exceeded; the verdict is NOT persisted (a budget-
+  // exceeded run did not actually finish verification).
+  if (usages.length > 0) {
+    const afterRecord = deps.store.getRun(run.id);
+    if (afterRecord && checkTokenBudget(deps, afterRecord, spec)) {
+      return applyEvent(
+        deps.store,
+        run.id,
+        {
+          type: 'verification_failed',
+          failure: {
+            category: 'budget_exceeded',
+            message: `token budget exceeded during semantic verification: ${afterRecord.tokensSpent} > ${spec.budget.maxTokens}`,
+          },
+        },
+        deps.now(),
+      );
+    }
+  }
 
   deps.store.insertVerdict(verdict);
   // Persist the verdict alongside the executor transcript. Index = current
@@ -315,7 +369,9 @@ async function tickVerifying(deps: Deps, run: Run): Promise<Run> {
       type: 'verification_failed',
       failure: {
         category: 'verification_failed',
-        message: 'one or more test commands did not exit 0',
+        message: verdict.semanticCheck.matches
+          ? 'one or more test commands did not exit 0'
+          : `semantic verification failed: ${verdict.semanticCheck.reasoning}`,
       },
     },
     deps.now(),

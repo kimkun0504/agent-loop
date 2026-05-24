@@ -24,7 +24,7 @@ import {
 } from '@agent-loop/core';
 import {
   ClaudeCliExecutor,
-  runExitCodeVerifier,
+  runVerifier,
   tick,
   isStopRequested,
   writeMetaArtifact,
@@ -121,7 +121,16 @@ export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
       repoDir: env.repoDir,
       now,
       executor: new ClaudeCliExecutor(),
-      verifier: runExitCodeVerifier,
+      // Pass the same Anthropic client through to the semantic verifier
+      // (Sonnet). The composer handles the no-client case (exit-code only)
+      // for callers that haven't loaded credentials.
+      verifier: (run, spec, options) =>
+        runVerifier(run, spec, {
+          ...options,
+          ...(opts.anthropicClient !== undefined
+            ? { client: opts.anthropicClient }
+            : {}),
+        }),
       prOpener: new NoopPrOpener(),
       ...(opts.anthropicClient !== undefined ? { anthropicClient: opts.anthropicClient } : {}),
     };
