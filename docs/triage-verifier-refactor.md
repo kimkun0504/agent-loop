@@ -150,7 +150,7 @@ System prompt principles:
 - Role: "You verify whether an agent's diff satisfies a list of acceptance criteria, one criterion at a time."
 - Bias toward strictness: "When in doubt, mark `met: false`. A false-negative (asking a human to re-check) is cheaper than a false-positive (merging a wrong fix)." This is the calibration lever — see Risks.
 - Output format: forced tool call.
-- Examples: 2 worked pairs covering (a) clean pass on a simple change, (b) honest rejection of a diff that misses a criterion. Examples MUST have `met: false` cases — they teach the model to actually fail criteria, not rubber-stamp.
+- Examples: 2 worked pairs covering (a) clean pass on a simple change, (b) honest rejection of a diff that misses a criterion. Examples MUST have `met: false` cases — they teach the model to actually fail criteria, not rubber-stamp. **At least one example must include a borderline judgment in its `reasoning` field** — a criterion where the diff *almost* satisfies the requirement but a specific detail tips it to `met: false` (e.g., function added but doesn't throw on invalid input as required). Trivial examples — "function X exists in the diff → met: true" — teach rubber-stamping. The reasoning is the model's working; the examples set what depth of working we expect.
 
 User prompt structure:
 - `# Diff` block with the full `git diff main` (capped)
@@ -170,10 +170,11 @@ Same as triage/planner: 1 retry on invalid output, with feedback inlined. Two co
 
 ### SDK error policy
 
-**Fail-closed for the eval suite, fail-open opt-in for production.**
+**Fail-closed by default. In every mode. Opt-in only.**
 
-- Default behavior: if the SDK throws (network, rate limit), the verdict is marked `pass: false` with `semanticCheck.matches: false` and reasoning explaining the SDK error. Run lands in `failed` with category `transient`.
-- Opt-out: `VerifyOptions.semanticOnSdkError?: 'fail-closed' | 'pass-with-warning'`. Default `fail-closed`. Production CLI may flip to `pass-with-warning` later, but eval suite stays strict.
+- Default behavior (eval AND production): if the SDK throws (network, rate limit), the verdict is marked `pass: false` with `semanticCheck.matches: false` and reasoning explaining the SDK error. Run lands in `failed` with category `transient`.
+- Opt-in opt-out: CLI flag `--semantic-verification-on-error <strict|skip>`, default `strict`. Plumbed through as `VerifyOptions.semanticOnSdkError`. `strict` = fail-closed (default). `skip` = mark semantic step as skipped, accept exit-code-only verdict, log a warning. **The opt-in must be typed explicitly per invocation** — there is no env-var or config-file equivalent. We don't want a forgotten dotfile silently downgrading the verifier.
+- Eval suite ignores the flag and is hard-coded to `strict`. Eval can't drift loose.
 
 ### Cost expectation
 
@@ -246,7 +247,33 @@ Mitigations:
 - Pin Sonnet model id explicitly in the constant.
 - Eval suite per-commit comparison: if pass rate shifts > 10 pp without a code change, investigate.
 
-**Calibration story summary:** the calibration is empirical, not theoretical. The new verifier ships with the old shell testCommands kept as side-channel anchors in a temporary calibration mode. We run CHECKPOINT 3 several times under the new architecture; if pass rate matches the old approach (or beats it) AND the calibration anchor catches no false positives, we trust the new verifier and remove the anchor. If we catch false positives, we iterate the prompt or fall back. **No declaration of "the semantic verifier is correct" without empirical data.**
+**Calibration story summary:** the calibration is empirical, not theoretical. The new verifier ships with the old shell testCommands kept as side-channel anchors in a temporary calibration mode. We run CHECKPOINT 3 several times under the new architecture; if pass rate matches the old approach (or beats it) AND the calibration anchor catches no disagreements, we trust the new verifier and remove the anchor. If we catch disagreements, we iterate the prompt or fall back. **No declaration of "the semantic verifier is correct" without empirical data.**
+
+### Calibration-anchor disagreement policy
+
+When the anchor disagrees with the semantic verifier on a given run, the **semantic verifier's decision is authoritative** for the run's pass/fail and for the verdict written to the DB. The anchor produces signal, not blocking. Specifically:
+
+| Anchor result | Semantic result | Run outcome | Side effects |
+|---|---|---|---|
+| pass | pass | pass | no log |
+| fail | fail | fail | no log (agreement) |
+| pass | fail | **fail** (per semantic) | warn-level log, surfaced in eval report |
+| fail | pass | **pass** (per semantic) | warn-level log, surfaced in eval report — this is the false-positive risk we most need to see |
+
+The anchor's exit-code result is recorded alongside the verdict in the per-run artifact (`verdict-NNN.json` gains an optional `calibrationAnchor: { commands: [...], exitCodes: [...], agreement: boolean }` block). The eval report's summary section gets a new "Calibration disagreements" line: `N/M tasks (paths listed)`. Zero disagreements = clean run. Non-zero = the items to investigate this cycle.
+
+Concretely: a `pass: false` calibration anchor with `pass: true` semantic on `add-edge-case-tests` would surface as:
+```
+Calibration disagreements: 1/8
+  - add-edge-case-tests: anchor failed (`git diff --quiet main -- src/` exit 1), semantic passed (criterion "src/parse-int32.js is unchanged" judged met)
+```
+That's a calibration miss. Either the anchor is wrong (false fail — over-strict shell command), the semantic verifier is wrong (false pass — rubber-stamping), or the criterion's wording is ambiguous. Investigate per-case; don't generalize.
+
+### Calibration-anchor removal gate
+
+The anchor does NOT get removed on a schedule. It gets removed when the eval suite produces **zero disagreements across one full run** (all 8 tasks, both modes agree). If disagreements remain — even one — the calibration period continues; investigate, iterate, re-run, gate again.
+
+A separate BACKLOG entry (`gap-calibration-anchor-removal`) tracks the removal. The entry's trigger explicitly states: **"close when one full eval suite run shows 0/8 disagreements between calibration anchor and semantic verifier; not before, not on a timer."** This locks the gate against the same discipline failure pattern we just exited — "we said one cycle, it's been one cycle, ship the removal" is the same shape as "we said three patches, the third hasn't strictly happened yet, ship the patch." We escape only by writing the gate as a measurable condition, not a window.
 
 ## Tests
 
@@ -286,26 +313,32 @@ Budget enforcement:
 6. **runtime/orchestrator/tick.ts** — `tickVerifying` applies verifier's `usages` events + cross-phase budget check.
 7. **core types** — extend `Verdict.semanticCheck` with optional `perCriterion` field. Existing serialization stays compatible (row converter handles missing field).
 8. **Eval task migration** — single docs/data commit updating the 5 expected.json files (extract-helper, rename-export, add-edge-case-tests, split-module, add-clamp).
-9. **Calibration anchor** — temporary side-channel comparison: keep the OLD testCommands in a `expected.json.calibrationTestCommands` field, run them alongside the new flow during eval runs, log disagreements. Single commit, behind a flag.
-10. **Re-run CHECKPOINT 3** — must hit ≥7/8 to proceed to Phase F (per your stated gate). Investigate any calibration disagreements.
-11. **Remove the calibration anchor** in a follow-up commit once we've trusted the new verifier across one or two eval cycles.
+9. **Calibration anchor** — temporary side-channel comparison: keep the OLD testCommands in a `expected.json.calibrationTestCommands` field, run them alongside the new flow during eval runs, log warn-level on disagreement, surface disagreements in eval report summary. Anchor is signal-only — semantic verdict is authoritative for run outcome. Single commit.
+10. **Re-run CHECKPOINT 3** — must hit ≥7/8 to proceed to Phase F (per your stated gate). Calibration disagreement count is logged but does NOT block CHECKPOINT 3's ≥7/8 gate (a disagreement is a signal to investigate, not a gate). However, the anchor removal step (11) is separately gated on zero disagreements.
+11. **Remove the calibration anchor** — separate later commit, **gated on one full eval suite run with 0/8 disagreements**. Tracked as a new BACKLOG entry (`gap-calibration-anchor-removal`). Not on a timer, not "after a cycle" — only on measurable agreement. If the first re-run shows N>0 disagreements, investigate each (anchor-wrong / verifier-wrong / criterion-ambiguous), fix, re-run; anchor stays until the gate fires.
 
 Estimated work: 2–3 sessions for steps 2–9; one CHECKPOINT 3 re-run; removal of anchor is a separate later commit. Multi-commit; conventional commit format throughout; each step tests + typechecks before commit.
 
-## Open questions / signoffs requested
+## Signoff status (2026-05-24)
 
-1. **Restricted testCommand vocabulary**: starting set is `npm test|run typecheck|run lint|run build` + `pnpm test|typecheck|lint|build`. OK to ship with that or do you want to add `vitest`, `jest`, `tsc --noEmit`, etc.? My preference: keep starting set minimal; add entries as concrete needs surface. Out-of-vocab triage outputs fail validation and the model retries → eventually we'll see what's actually missing.
+All seven open questions signed off by user, with the refinements below incorporated above:
 
-2. **Calibration anchor**: I'm proposing keeping the OLD shell testCommands in a `calibrationTestCommands` field on `expected.json` (a new field, only read by the eval runner during the calibration window). Alternative: don't keep them at all, trust the semantic verifier from day one. My preference: keep the anchor through one eval cycle to validate; removal in a follow-up commit is a one-line delete.
+1. **Restricted testCommand vocabulary** — SIGNED. Ship minimal starting set. Expand on concrete signal.
+2. **Calibration anchor** — SIGNED, with two refinements: (a) disagreement-logging policy explicit in §"Calibration-anchor disagreement policy"; (b) removal gated on **zero disagreements**, not on a cycle count. New BACKLOG entry `gap-calibration-anchor-removal` carries the gate.
+3. **SDK-error default** — SIGNED, with refinement: **production also defaults to fail-closed.** Opt-in only via explicit CLI flag `--semantic-verification-on-error <strict|skip>`, default `strict`. No env-var / config-file path. Eval suite hard-coded to `strict`.
+4. **Verdict.semanticCheck.perCriterion field** — SIGNED.
+5. **Pricing constants hoisting** — SIGNED.
+6. **Examples in the semantic verifier prompt** — SIGNED, with refinement: **at least one example must include a borderline-case judgment** in the `reasoning` field (not "function X exists in diff → met: true"). Trivial pairs teach rubber-stamping; the reasoning depth in the examples is what we're calibrating the model toward.
+7. **Vocabulary in triage prompt + schema** — SIGNED (both).
 
-3. **SDK-error default**: fail-closed for eval, opt-in fail-open for production. OK?
+## Review gate before code starts
 
-4. **Verdict.semanticCheck.perCriterion field**: new optional field on the Verdict type — existing rows in the DB stay valid (field is absent). OK?
+Before I begin step 2 (pricing hoisting), four sections of this document are sent back inline for review:
+- The semantic verifier's prompt structure (system prompt, user prompt template, output schema)
+- The exact migration of the 5 `expected.json` files (each file's old → new content)
+- The disagreement-logging mechanic for the calibration anchor (per refinement A)
+- The new verifier's test plan (unit, integration, eval)
 
-5. **Pricing constants hoisting**: `agents/pricing.ts` as a single source. Existing `HAIKU_PRICING` + `SONNET_PRICING` move out of their respective agent files. Trivial refactor; included here so it's not surprise scope-creep in a later commit.
+After signoff on those four sections, proceed to code. Same execution rules: reversible decisions called inline, irreversible/scope-changing ones surfaced for approval.
 
-6. **Examples in the semantic verifier prompt**: I'm proposing 2 worked examples — one all-met pass, one with a `met: false` rejection. Should I pull these from the eval task set (risk of overfitting to those exact tasks) or write fresh ones (more text in the system prompt)? My preference: fresh ones, drawn from non-eval domains, same approach as the triage/planner prompt examples.
-
-7. **Should triage be informed about the vocabulary explicitly in the prompt OR only via the schema?** Both, ideally — schema enforces; prompt guides. Confirming I should add the explicit vocabulary list to the system prompt with rationale ("these are the runnable commands the verifier supports; anything else, put in acceptanceCriteria").
-
-Once signed off, I'll begin at step 2 (pricing hoisting) and proceed through 9; CHECKPOINT 3 re-run is the gate before Phase F starts.
+Phase F starts after the refactor lands AND CHECKPOINT 3 re-run hits ≥7/8 AND the calibration anchor produces zero disagreements on that re-run.
