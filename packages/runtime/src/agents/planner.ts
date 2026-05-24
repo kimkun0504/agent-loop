@@ -34,19 +34,7 @@ import {
   buildPlannerUserPrompt,
 } from './plannerPrompt.js';
 import { validatePlannerOutput } from './plannerValidate.js';
-
-/**
- * Approximate Sonnet 4.6 per-MTok pricing. Sonnet is ~3x Haiku's price for
- * input and output, ~3x for cache reads. As with triage, getting cost
- * within 10% is good enough — the audit trail value is in being able to
- * compare runs across phases.
- */
-const SONNET_PRICING = {
-  input: 3.0,
-  output: 15.0,
-  cacheRead: 0.30,
-  cacheCreate: 3.75,
-} as const;
+import { SONNET_PRICING } from './pricing.js';
 
 export const DEFAULT_PLANNER_MODEL = 'claude-sonnet-4-6';
 const MAX_OUTPUT_TOKENS = 4_000;

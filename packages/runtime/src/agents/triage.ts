@@ -41,19 +41,7 @@ import {
   buildTriageUserPrompt,
 } from './triagePrompt.js';
 import { validateTriageOutput } from './triageValidate.js';
-
-/**
- * Approximate per-MTok prices for the Haiku model triage uses. Hardcoded
- * for now; when planner ships in Phase E we'll grow this into a shared
- * price table keyed by model id. The dollar number is for the audit
- * trail / cost reports — getting it within 10% is good enough.
- */
-const HAIKU_PRICING = {
-  input: 1.0,
-  output: 5.0,
-  cacheRead: 0.10,
-  cacheCreate: 1.25,
-} as const;
+import { HAIKU_PRICING } from './pricing.js';
 
 export const DEFAULT_TRIAGE_MODEL = 'claude-haiku-4-5-20251001';
 const MAX_OUTPUT_TOKENS = 2_000;
