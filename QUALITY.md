@@ -16,12 +16,14 @@ The system must do what it says it does.
 
 | Metric | Target | How measured |
 |---|---|---|
-| Eval pass rate | ≥ 80% of tasks in `evals/tasks/` produce a verdict.pass=true verdict on a clean run | `pnpm eval` (to be built) runs each task; pass counted |
+| Eval pass rate | ≥ 80% of tasks in `evals/tasks/` produce a verdict.pass=true verdict on a clean run | `pnpm eval` runs each task; pass counted |
 | State machine determinism | 100% — replaying the event log of any past run produces the same final Run state | Replay test in `packages/core/test/replay.test.ts` (to be built) |
 | Test suite passing | 100% on every commit to main | `pnpm -r test` in CI (CI to be built) |
 | Typecheck passing | 100% on every commit to main | `pnpm -r typecheck` in CI |
 | Zero-token runs | 0% — no completed run reports `tokensSpent: 0` | Assertion in the eval harness |
 | Orphan worktrees after a run | 0 — every completed run cleans up its worktree directory | Filesystem check after eval suite |
+
+**Caveat on eval pass rate.** Pass rate measures *correctness* of the agent's output, not *necessity* of each component in the loop. CHECKPOINT 2 (Week 3, Phase D) found that vague-spec eval tasks designed to require triage still passed in baseline-mode (no triage) because the executor with broad file-scope access often compensates for thin specs by reading the repo itself. **Triage's value-add (and later, the planner's) is not currently measurable by raw pass rate alone.** This is a known gap in the metric, not in the agents — tracked as `polish-eval-tasks-baseline-differentiation` in `BACKLOG.md`. Until that's resolved, when interpreting CHECKPOINT 2+ numbers: a baseline-vs-with-triage pass-rate delta near zero may mean triage adds no value, OR may mean the tasks aren't designed to require triage. Read the per-task breakdown and the per-phase cost / cache-hit numbers, not just the headline pass rate.
 
 ## Tier 2: Performance
 
