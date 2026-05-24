@@ -16,9 +16,11 @@
  * the model can correct course.
  */
 
-import type {
-  TriageProducedSpec,
-  TriageRejectionReason,
+import {
+  VALID_TEST_COMMANDS,
+  type TriageProducedSpec,
+  type TriageRejectionReason,
+  type ValidTestCommand,
 } from './triageSchema.js';
 
 export type ValidatedTriage =
@@ -75,11 +77,10 @@ function validateSpecBranch(raw: Record<string, unknown>): ValidatedTriage | Val
     errors,
     1,
   );
-  const testCommands = nonEmptyStringArray(
+  const testCommands = stringArray(
     spec['testCommands'],
     'spec.testCommands',
     errors,
-    1,
   );
 
   if (fileScope && fileScope.some((g) => FORBIDDEN_GLOBS.has(g))) {
@@ -96,6 +97,17 @@ function validateSpecBranch(raw: Record<string, unknown>): ValidatedTriage | Val
     errors.push(
       `spec.testCommands has ${testCommands.length} entries; max is ${MAX_TEST_COMMANDS}`,
     );
+  }
+  if (testCommands) {
+    const validSet = new Set<string>(VALID_TEST_COMMANDS);
+    const invalid = testCommands.filter((c) => !validSet.has(c));
+    if (invalid.length > 0) {
+      errors.push(
+        `spec.testCommands contains commands outside the allowed vocabulary: ${invalid
+          .map((c) => JSON.stringify(c))
+          .join(', ')}. Allowed: ${VALID_TEST_COMMANDS.join(', ')}. Move file-state assertions (no-X-remains, don't-touch-Y, file-Z-exists) into acceptanceCriteria as natural language — the semantic verifier will judge them against the diff.`,
+      );
+    }
   }
 
   if (errors.length > 0) return { errors };
@@ -197,6 +209,27 @@ function nonEmptyStringArray(
     return null;
   }
   if (!v.every((s) => typeof s === 'string' && s.trim().length > 0)) {
+    errors.push(`${field} must contain non-empty strings`);
+    return null;
+  }
+  return v as string[];
+}
+
+/**
+ * Like nonEmptyStringArray but allows empty arrays. Used for testCommands,
+ * which may be empty for tasks verifiable purely via acceptanceCriteria
+ * (docs-only changes, README edits, etc.).
+ */
+function stringArray(
+  v: unknown,
+  field: string,
+  errors: string[],
+): string[] | null {
+  if (!Array.isArray(v)) {
+    errors.push(`${field} must be an array`);
+    return null;
+  }
+  if (!v.every((s) => typeof s === 'string' && s.length > 0)) {
     errors.push(`${field} must contain non-empty strings`);
     return null;
   }

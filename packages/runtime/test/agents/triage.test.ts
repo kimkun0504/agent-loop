@@ -158,10 +158,14 @@ describe('runTriage: retry on invalid output', () => {
     const store = freshStore();
     const run = seedTriagingRun(store);
     const client = fakeClient([
-      // Call 1: missing testCommands
+      // Call 1: testCommands outside the documented vocabulary
+      // (a negated grep — what triage USED to produce; now rejected).
       toolUseResponse({
         ...validSpecInput,
-        spec: { ...validSpecInput.spec, testCommands: [] },
+        spec: {
+          ...validSpecInput.spec,
+          testCommands: ['npm test', "! grep -rE 'foo\\b' src/"],
+        },
       }),
       // Call 2: corrected
       toolUseResponse(validSpecInput),

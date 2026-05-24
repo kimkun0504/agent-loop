@@ -19,6 +19,32 @@ import type { TokenUsage } from '@agent-loop/core';
 
 export const TRIAGE_TOOL_NAME = 'submit_triage_result';
 
+/**
+ * Vocabulary of testCommands the verifier knows how to run. Triage picks
+ * from this enum; novel shell commands are schema-rejected.
+ *
+ * Scope: JS/TS only for Week 3. Adding language support (`cargo test`,
+ * `go test`, `pytest`, etc.) means adding entries here — deliberate,
+ * reviewable, schema-enforced. The triage system prompt also lists this
+ * vocabulary explicitly with rationale.
+ *
+ * Anything outside this set (file-state assertions, absence checks,
+ * "don't touch X" guards) goes in acceptanceCriteria as natural
+ * language; the semantic verifier judges those against the diff.
+ */
+export const VALID_TEST_COMMANDS = [
+  'npm test',
+  'npm run typecheck',
+  'npm run lint',
+  'npm run build',
+  'pnpm test',
+  'pnpm typecheck',
+  'pnpm lint',
+  'pnpm build',
+] as const;
+
+export type ValidTestCommand = typeof VALID_TEST_COMMANDS[number];
+
 export const TRIAGE_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -59,10 +85,23 @@ export const TRIAGE_INPUT_SCHEMA = {
         },
         testCommands: {
           type: 'array',
-          minItems: 1,
-          items: { type: 'string' },
+          minItems: 0,
+          maxItems: 5,
+          items: {
+            type: 'string',
+            enum: [
+              'npm test',
+              'npm run typecheck',
+              'npm run lint',
+              'npm run build',
+              'pnpm test',
+              'pnpm typecheck',
+              'pnpm lint',
+              'pnpm build',
+            ],
+          },
           description:
-            'Shell commands the verifier will run after the agent edits. All must exit 0 for the run to pass.',
+            'Test commands the verifier will run. PICK FROM THE ENUM ONLY — novel shell commands are schema-invalid. File-state assertions ("no parseDate remains", "src/foo.js unchanged") go in acceptanceCriteria as natural language; the semantic verifier judges those against the diff. Empty array is acceptable if the task is verifiable entirely by acceptanceCriteria (e.g., a docs-only change).',
         },
       },
       required: ['title', 'description', 'fileScope', 'acceptanceCriteria', 'testCommands'],

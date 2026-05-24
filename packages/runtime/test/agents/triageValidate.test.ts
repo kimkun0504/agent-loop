@@ -111,12 +111,12 @@ describe('validateTriageOutput: spec branch', () => {
     expect('errors' in r).toBe(true);
   });
 
-  it('rejects empty testCommands', () => {
+  it('accepts empty testCommands (docs-only or semantic-only tasks)', () => {
     const r = validateTriageOutput({
       ...validSpec,
       spec: { ...validSpec.spec, testCommands: [] },
     });
-    expect('errors' in r).toBe(true);
+    expect('errors' in r).toBe(false);
   });
 
   it('rejects more than 5 testCommands', () => {
@@ -124,7 +124,42 @@ describe('validateTriageOutput: spec branch', () => {
       ...validSpec,
       spec: {
         ...validSpec.spec,
-        testCommands: Array.from({ length: 6 }, (_, i) => `cmd-${i}`),
+        // 6 vocabulary commands — over the maxItems:5 limit even though
+        // each is individually valid.
+        testCommands: [
+          'npm test',
+          'npm run typecheck',
+          'npm run lint',
+          'npm run build',
+          'pnpm test',
+          'pnpm typecheck',
+        ],
+      },
+    });
+    expect('errors' in r).toBe(true);
+  });
+
+  it('rejects testCommands outside the documented vocabulary', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        testCommands: ['npm test', "! grep -rE 'foo\\b' src/"],
+      },
+    });
+    expect('errors' in r).toBe(true);
+    if ('errors' in r) {
+      expect(r.errors[0]).toMatch(/outside the allowed vocabulary/);
+      expect(r.errors[0]).toMatch(/move file-state assertions/i);
+    }
+  });
+
+  it('rejects git diff guards in testCommands (architecturally invalid)', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        testCommands: ['npm test', 'git diff --quiet main -- src/'],
       },
     });
     expect('errors' in r).toBe(true);

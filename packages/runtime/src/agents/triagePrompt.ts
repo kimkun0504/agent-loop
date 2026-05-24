@@ -12,6 +12,14 @@
  *
  * Examples deliberately use unrelated domains from the eval suite so we
  * don't overfit triage to recognize the eval tasks specifically.
+ *
+ * **The testCommands vocabulary is restricted to a documented enum.**
+ * Triage does NOT author shell verification commands. File-state
+ * assertions ("no X remains", "src/Y unchanged", "file Z exists") go in
+ * acceptanceCriteria as natural language; the semantic verifier (Sonnet)
+ * judges those against the diff. This architecture replaced an iterative
+ * prompt-patching trajectory that was diverging — see
+ * docs/triage-verifier-refactor.md.
  */
 
 import type { RepoContextSnapshot } from './repoContext.js';
@@ -46,15 +54,37 @@ When uncertain between spec and rejection, lean toward \`spec\`. The downstream 
   - Name specific files when the task mentions them (e.g. \`["src/math.js", "test/math.test.js"]\`).
   - Use broader globs like \`["src/**/*.js"]\` only when the task is general and the file isn't named.
   - NEVER use \`["**/*"]\` — that's not a scope, that's a blank check.
-- \`acceptanceCriteria\`: 3–8 concrete, testable bullets. Each one must be verifiable by an exit-code check OR by reading the diff. Bad: "code is well-structured". Good: "clamp(-3, 0, 10) returns 0".
-- \`testCommands\`: shell commands the verifier runs after the agent edits. All must exit 0 for the run to pass.
-  - Default to \`["npm test"]\` unless the repo's package.json suggests otherwise.
-  - For tasks like "don't modify the test file", add a second command like \`"git diff --quiet main -- test/"\`.
-  - For **absence** verifications (renames, removals — "no X remains anywhere"), use a NEGATED grep: \`"! grep -rE 'oldName\\\\b' src/ test/"\`. The \`!\` matters — \`grep\` exits 0 when it FINDS matches, which is the opposite of what we want here. The \`\\\\b\` word boundary avoids false positives on partial matches like \`oldNameSpace\`. Do NOT use \`git grep -l\` or bare \`grep\` for absence — they also exit 0 on found and would invert the test.
-  - For **presence** verifications (a specific token must appear in a file), use \`grep -q\`: \`"grep -q 'newName' src/file.js"\`. \`grep -q\` exits 0 when matches are found.
-  - For **"don't modify this path"** verifications, use \`git diff --quiet main -- <path>\`. **Two things matter**: (1) the ref is \`main\`, NOT \`HEAD\` — \`HEAD\` is the agent's own commit after it edits, so \`git diff --quiet HEAD\` always exits 0 and the test is meaningless; \`main\` is the pre-agent baseline, so a real comparison happens. (2) Do NOT add \`!\` — \`git diff --quiet\` already exits 0 when there are NO changes (which is what we want for "this path was not touched"); adding \`!\` would invert that and fail when the agent does the right thing.
+- \`acceptanceCriteria\`: 3–8 concrete, observable claims about the post-edit repo state. Each criterion is judged against the agent's diff by a downstream semantic verifier. Phrase them as observations a careful reader could verify by reading the diff. Examples:
+  - "clamp(-3, 0, 10) returns 0"
+  - "src/foo.js exports a \`parse\` function"
+  - "no occurrence of the token \`parseDate\` (as a whole word) in src/ or test/"
+  - "src/parse-int32.js is unchanged from the initial commit (no hunks touching that path)"
+  - "test/handler.test.js imports the renamed export newName, not oldName"
+  Phrasing matters: read the verb. "throws X on bad input" and "returns null on bad input" are different criteria.
+- \`testCommands\`: a list picked from a fixed VOCABULARY of runnable project commands. The verifier executes each in the worktree; all must exit 0 for the run to pass.
 
-# Three worked examples
+# testCommands VOCABULARY (the only commands you may use)
+
+\`\`\`
+npm test           pnpm test
+npm run typecheck  pnpm typecheck
+npm run lint       pnpm lint
+npm run build      pnpm build
+\`\`\`
+
+Pick the ones that exist in the target repo's package.json scripts. Common defaults: \`["npm test"]\` or \`["pnpm test"]\` depending on the package manager. **Anything outside this vocabulary is schema-invalid — the model is expected to fail closed if asked to produce a shell command not on this list.** That includes \`grep\`, \`git diff\`, \`test -f\`, \`bash\` invocations, custom scripts. Those concerns belong in \`acceptanceCriteria\` (judged by the semantic verifier against the diff).
+
+The testCommands array MAY be empty if the task is verifiable entirely through acceptanceCriteria (e.g., a docs-only edit where no test suite is meaningful). Prefer including \`npm test\` or \`pnpm test\` when the repo has a working test suite — it catches whole categories of breakage that a diff inspection might miss.
+
+# Anti-patterns for acceptanceCriteria
+
+These shapes are wrong and will not be judged correctly by the downstream verifier:
+
+- **Exit-code checks.** Do NOT write "command \`foo\` exits 0" or "\`grep -r X src/\` finds matches" as an acceptance criterion. The semantic verifier judges criteria against the diff, not by running shell commands. If you want a shell check, it has to be in testCommands (and therefore from the vocabulary above). If the vocabulary doesn't cover what you want, rephrase the claim as an observation about the diff ("the diff adds a test asserting X").
+- **Vague verbs.** Don't write "code is well-structured" or "improved performance". Concrete and observable, every time.
+- **Reference to pre-edit state without observability.** "Performance is 20% faster than before" is unobservable from a diff. Reframe as "the diff replaces the O(n²) loop in src/x.js with the O(n) sort-then-scan approach", which is observable.
+
+# Worked examples
 
 ## Example A — actionable, becomes a spec
 
@@ -74,12 +104,14 @@ Tool call:
       "parse('$0.00') returns 0",
       "parse('not money') throws RangeError",
       "parse(42) throws TypeError",
-      "existing exports in src/money.js are unchanged"
+      "existing exports in src/money.js are unchanged from the initial commit"
     ],
     "testCommands": ["npm test"]
   }
 }
 \`\`\`
+
+Note how "existing exports unchanged" is an acceptanceCriterion (judged by the semantic verifier reading the diff), not a shell command.
 
 ## Example B — too vague, becomes a rejection
 
@@ -103,9 +135,7 @@ Tool call:
 }
 \`\`\`
 
-## Example C — rename, becomes a spec with an absence-verification testCommand
-
-This example shows the negated-grep pattern in action. The verifier requires every testCommand to exit 0; \`! grep ...\` exits 0 when no matches are found, which is what we want for a "no token remains anywhere" check.
+## Example C — rename, expressed as a natural-language absence claim
 
 User input:
 > Task: Rename \`oldName\` to \`newName\` everywhere it's used. Currently in \`src/handler.js\` and \`test/handler.test.js\`.
@@ -119,24 +149,19 @@ Tool call:
     "description": "Rename the exported \`oldName\` symbol in \`src/handler.js\` to \`newName\`. Update the import in \`test/handler.test.js\` and any other references. After the change, \`oldName\` should not appear as a token anywhere under \`src/\` or \`test/\`.",
     "fileScope": ["src/handler.js", "test/handler.test.js"],
     "acceptanceCriteria": [
-      "the export in src/handler.js is named newName",
-      "test/handler.test.js imports newName, not oldName",
-      "no occurrence of the token oldName remains under src/ or test/",
-      "all tests pass"
+      "the export in src/handler.js is renamed from oldName to newName",
+      "test/handler.test.js imports newName from src/handler.js (not oldName)",
+      "no occurrence of the token oldName (as a whole word) remains anywhere under src/ or test/",
+      "npm test still passes"
     ],
-    "testCommands": [
-      "npm test",
-      "! grep -rE 'oldName\\\\b' src/ test/"
-    ]
+    "testCommands": ["npm test"]
   }
 }
 \`\`\`
 
-Note the \`!\` and the \`\\\\b\` word boundary in the grep command. Without \`!\`, the test would exit 0 when matches are found — inverting what we want. Without \`\\\\b\`, partial matches like \`oldNameSpace\` would trigger the test even after the rename succeeded.
+Note: there is NO \`grep\` in testCommands. The "no occurrence of oldName" claim is an acceptanceCriterion — the semantic verifier reads the diff and judges whether oldName-shaped tokens remain. This pattern replaces what used to be a \`! grep -rE 'oldName\\\\b'\` shell command in earlier triage versions.
 
-## Example D — test-only change with a "do not modify src/" guard
-
-This example shows the git-diff guard. The user wants the agent to add tests without changing source. Use \`git diff --quiet main -- src/\` (un-negated; ref is \`main\`, NOT \`HEAD\`).
+## Example D — test-only change with a "don't modify src/" guard
 
 User input:
 > Task: Our \`isValidEmail\` function has thin test coverage. Add tests in \`test/email.test.js\` for: empty string, missing @, multiple @ signs, valid simple address, valid address with subdomain. Do not modify \`src/email.js\` — just add tests.
@@ -150,22 +175,20 @@ Tool call:
     "description": "Extend \`test/email.test.js\` with edge-case coverage for the existing \`isValidEmail\` function: empty input, missing @, multiple @, valid simple form, valid with subdomain. Source file \`src/email.js\` must not be touched — this is a test-only change.",
     "fileScope": ["test/email.test.js"],
     "acceptanceCriteria": [
-      "test/email.test.js contains assertions for empty-string, missing-@, and multiple-@ cases",
-      "test/email.test.js contains assertions for a valid simple address and a subdomain address",
-      "src/email.js is unchanged from the initial commit",
+      "test/email.test.js contains an assertion for the empty-string case",
+      "test/email.test.js contains an assertion for the missing-@ case",
+      "test/email.test.js contains an assertion for the multiple-@ case",
+      "test/email.test.js contains an assertion for a valid simple address",
+      "test/email.test.js contains an assertion for a valid address with a subdomain",
+      "src/email.js is unchanged from the initial commit (no hunks touching that path)",
       "npm test passes"
     ],
-    "testCommands": [
-      "npm test",
-      "git diff --quiet main -- src/"
-    ]
+    "testCommands": ["npm test"]
   }
 }
 \`\`\`
 
-Why \`git diff --quiet main -- src/\` and not \`! git diff --quiet HEAD -- src/email.js\`?
-- **Ref is \`main\`, not \`HEAD\`.** \`HEAD\` is the agent's own commit after it edits — \`git diff --quiet HEAD\` always exits 0 and the test is meaningless. \`main\` is the pre-agent baseline.
-- **No \`!\` prefix.** \`git diff --quiet\` already exits 0 when there are NO changes (which is exactly the pass condition for "not modified"); negating with \`!\` would make the test pass only when the agent DID modify the file — the opposite of intent.
+Note: there is NO \`git diff --quiet main -- src/\` in testCommands. The "src/email.js is unchanged" claim is an acceptanceCriterion — the semantic verifier sees the full diff and judges whether any hunks touch src/email.js. This pattern replaces what used to be a \`git diff --quiet main -- src/\` shell guard.
 `;
 
 export function buildTriageUserPrompt(
@@ -214,5 +237,5 @@ You called \`submit_triage_result\` but the input did not satisfy the requiremen
 
 ${validatorErrors.map((e) => `- ${e}`).join('\n')}
 
-Call \`submit_triage_result\` again with corrected input. Do not explain — just call the tool.`;
+Call \`submit_triage_result\` again with corrected input. Remember: testCommands MUST come from the documented vocabulary (npm test / pnpm test / npm run typecheck / etc.). File-state claims go in acceptanceCriteria as natural language. Do not explain — just call the tool.`;
 }
