@@ -100,6 +100,34 @@ export {
   type TriageInput,
 } from './agents/triage.js';
 export {
+  PLANNER_INPUT_SCHEMA,
+  PLANNER_TOOL_NAME,
+  type PlannerProducedPlan,
+  type PlannerRejectionReason,
+  type PlannerResult,
+} from './agents/plannerSchema.js';
+export {
+  PLANNER_SYSTEM_PROMPT,
+  buildPlannerUserPrompt,
+  buildPlannerRetryUserPrompt,
+} from './agents/plannerPrompt.js';
+export {
+  validatePlannerOutput,
+  type ValidatedPlanner,
+  type PlannerValidationFailure,
+} from './agents/plannerValidate.js';
+export {
+  runPlanner,
+  DEFAULT_PLANNER_MODEL,
+  type PlannerDeps,
+  type PlannerInput,
+} from './agents/planner.js';
+export {
+  collectFileContents,
+  globMatches,
+  type FileContentSnapshot,
+} from './agents/repoContext.js';
+export {
   writeExecutorArtifacts,
   writeVerdictArtifact,
   writeMetaArtifact,

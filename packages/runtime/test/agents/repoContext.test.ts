@@ -138,3 +138,86 @@ describe('collectRepoContext: byte caps', () => {
     expect(DEFAULT_CAPS.claudeMd).toBe(1_000);
   });
 });
+
+describe('globMatches', () => {
+  it('matches a literal path exactly', async () => {
+    const { globMatches } = await import('../../src/agents/repoContext.js');
+    expect(globMatches('src/foo.js', 'src/foo.js')).toBe(true);
+    expect(globMatches('src/foo.js', 'src/bar.js')).toBe(false);
+  });
+
+  it('* matches one segment', async () => {
+    const { globMatches } = await import('../../src/agents/repoContext.js');
+    expect(globMatches('src/*.js', 'src/foo.js')).toBe(true);
+    expect(globMatches('src/*.js', 'src/a/b.js')).toBe(false);
+  });
+
+  it('** matches across path segments', async () => {
+    const { globMatches } = await import('../../src/agents/repoContext.js');
+    expect(globMatches('src/**/*.js', 'src/foo.js')).toBe(true);
+    expect(globMatches('src/**/*.js', 'src/a/b/c.js')).toBe(true);
+    expect(globMatches('src/**/*.js', 'test/foo.js')).toBe(false);
+  });
+
+  it('test/**/*.js matches deep test files', async () => {
+    const { globMatches } = await import('../../src/agents/repoContext.js');
+    expect(globMatches('test/**/*.js', 'test/foo.test.js')).toBe(true);
+    expect(globMatches('test/**/*.js', 'test/sub/bar.test.js')).toBe(true);
+  });
+});
+
+describe('collectFileContents', () => {
+  it('reads literal paths', async () => {
+    const { collectFileContents } = await import('../../src/agents/repoContext.js');
+    makeFile('src/a.js', 'const a = 1;');
+    makeFile('src/b.js', 'const b = 2;');
+    const snaps = collectFileContents(root, ['src/a.js']);
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0]?.path).toBe('src/a.js');
+    expect(snaps[0]?.content).toBe('const a = 1;');
+  });
+
+  it('expands globs by walking the tree', async () => {
+    const { collectFileContents } = await import('../../src/agents/repoContext.js');
+    makeFile('src/foo.js', 'foo');
+    makeFile('src/bar.js', 'bar');
+    makeFile('test/foo.test.js', 'test');
+    const snaps = collectFileContents(root, ['src/**/*.js']);
+    expect(snaps.map((s) => s.path).sort()).toEqual(['src/bar.js', 'src/foo.js']);
+  });
+
+  it('combines literals and globs without double-counting', async () => {
+    const { collectFileContents } = await import('../../src/agents/repoContext.js');
+    makeFile('src/a.js', 'a');
+    makeFile('src/b.js', 'b');
+    const snaps = collectFileContents(root, ['src/a.js', 'src/*.js']);
+    const paths = snaps.map((s) => s.path);
+    expect(paths).toContain('src/a.js');
+    expect(paths).toContain('src/b.js');
+    expect(paths.filter((p) => p === 'src/a.js')).toHaveLength(1);
+  });
+
+  it('marks files as omitted once totalCap is reached', async () => {
+    const { collectFileContents } = await import('../../src/agents/repoContext.js');
+    makeFile('src/a.js', 'a'.repeat(50));
+    makeFile('src/b.js', 'b'.repeat(50));
+    makeFile('src/c.js', 'c'.repeat(50));
+    const snaps = collectFileContents(root, ['src/*.js'], 60);
+    expect(snaps.some((s) => s.omitted)).toBe(true);
+  });
+
+  it('skips deny-listed directories during glob expansion', async () => {
+    const { collectFileContents } = await import('../../src/agents/repoContext.js');
+    makeFile('src/real.js', 'r');
+    makeFile('node_modules/foo/index.js', 'x');
+    const snaps = collectFileContents(root, ['**/*.js']);
+    const paths = snaps.map((s) => s.path);
+    expect(paths).toContain('src/real.js');
+    expect(paths.find((p) => p.includes('node_modules'))).toBeUndefined();
+  });
+
+  it('returns [] when the target dir does not exist', async () => {
+    const { collectFileContents } = await import('../../src/agents/repoContext.js');
+    expect(collectFileContents(join(root, 'nope'), ['src/*.js'])).toEqual([]);
+  });
+});

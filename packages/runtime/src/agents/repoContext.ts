@@ -167,3 +167,163 @@ function truncate(s: string, cap: number): string {
   if (s.length <= cap) return s;
   return s.slice(0, cap) + '\n... [truncated]';
 }
+
+// --- File contents (planner-only) -----------------------------------------
+
+/**
+ * The planner needs to see actual code, not just the tree. This helper
+ * reads file contents up to a total byte cap.
+ *
+ * Path resolution:
+ *   - Literal paths (no `*`) are read directly.
+ *   - Globs are matched against the repo tree via a small built-in matcher
+ *     (`**` for any-depth, `*` for one segment). No `picomatch` dep.
+ *
+ * Files are added in order — literals first, then glob matches sorted by
+ * path — and we stop once `totalCap` bytes are reached. Later files
+ * appear with `omitted: true` so the model knows context was truncated.
+ *
+ * Kept separate from `collectRepoContext` because triage stays light (no
+ * file contents) — see `gap-triage-thin-context` in BACKLOG for the
+ * design tension.
+ */
+
+export interface FileContentSnapshot {
+  path: string;
+  content: string;
+  lines: number;
+  /** True when the file matched but was dropped (cap reached before its turn). */
+  omitted: boolean;
+  /** True when the file was read but truncated by the per-file cap. */
+  truncated: boolean;
+}
+
+const PER_FILE_CAP = 8_000;
+const DEFAULT_TOTAL_CAP = 30_000;
+
+export function collectFileContents(
+  target: string,
+  paths: ReadonlyArray<string>,
+  totalCap: number = DEFAULT_TOTAL_CAP,
+): FileContentSnapshot[] {
+  if (!existsSync(target)) return [];
+
+  const { literals, globs } = partition(paths);
+  const literalEntries = literals
+    .map((p) => ({ rel: p, abs: join(target, p) }))
+    .filter((p) => existsSync(p.abs));
+
+  const allFiles = globs.length > 0 ? walkFiles(target, target, 0) : [];
+  const matched = allFiles
+    .filter((p) => globs.some((g) => globMatches(g, p)))
+    .filter((p) => !literalEntries.some((l) => l.rel === p))
+    .sort();
+
+  const out: FileContentSnapshot[] = [];
+  let used = 0;
+  const reading = [...literalEntries.map((l) => l.rel), ...matched];
+
+  for (const rel of reading) {
+    const snapshot = readOneFile(join(target, rel), rel, used, totalCap);
+    out.push(snapshot);
+    used += snapshot.content.length;
+  }
+  return out;
+}
+
+function readOneFile(
+  abs: string,
+  rel: string,
+  used: number,
+  totalCap: number,
+): FileContentSnapshot {
+  if (used >= totalCap) {
+    return { path: rel, content: '', lines: 0, omitted: true, truncated: false };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(abs, 'utf8');
+  } catch {
+    return { path: rel, content: '', lines: 0, omitted: true, truncated: false };
+  }
+  const headroom = totalCap - used;
+  const cap = Math.min(PER_FILE_CAP, headroom);
+  const truncated = raw.length > cap;
+  const content = truncated ? raw.slice(0, cap) + '\n... [truncated]' : raw;
+  return {
+    path: rel,
+    content,
+    lines: raw.split('\n').length,
+    omitted: false,
+    truncated,
+  };
+}
+
+function partition(paths: ReadonlyArray<string>): {
+  literals: string[];
+  globs: string[];
+} {
+  const literals: string[] = [];
+  const globs: string[] = [];
+  for (const p of paths) {
+    if (p.includes('*')) globs.push(p);
+    else literals.push(p);
+  }
+  return { literals, globs };
+}
+
+function walkFiles(root: string, current: string, depth: number): string[] {
+  if (depth > DEFAULT_MAX_DEPTH + 1) return [];
+  const out: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(current).sort();
+  } catch {
+    return out;
+  }
+  for (const name of entries) {
+    if (DENY_LIST.has(name)) continue;
+    const abs = join(current, name);
+    try {
+      const s = statSync(abs);
+      if (s.isFile()) {
+        out.push(relative(root, abs));
+      } else if (s.isDirectory()) {
+        out.push(...walkFiles(root, abs, depth + 1));
+      }
+    } catch {
+      // unreadable
+    }
+  }
+  return out;
+}
+
+/**
+ * Tiny glob matcher. `**` matches any chars including `/`; `*` matches any
+ * chars except `/`. Anchored at both ends. Exported for tests.
+ */
+export function globMatches(glob: string, path: string): boolean {
+  const re = new RegExp(`^${globToRegex(glob)}$`);
+  return re.test(path);
+}
+
+function globToRegex(glob: string): string {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i] ?? '';
+    if (ch === '*') {
+      if (glob[i + 1] === '*') {
+        out += '.*';
+        i++;
+        if (glob[i + 1] === '/') i++;
+      } else {
+        out += '[^/]*';
+      }
+    } else if (ch === '/' || /[a-zA-Z0-9_\-.]/.test(ch)) {
+      out += ch;
+    } else {
+      out += '\\' + ch;
+    }
+  }
+  return out;
+}
