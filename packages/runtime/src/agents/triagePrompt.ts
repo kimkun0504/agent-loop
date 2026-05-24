@@ -52,6 +52,7 @@ When uncertain between spec and rejection, lean toward \`spec\`. The downstream 
   - For tasks like "don't modify the test file", add a second command like \`"git diff --quiet main -- test/"\`.
   - For **absence** verifications (renames, removals — "no X remains anywhere"), use a NEGATED grep: \`"! grep -rE 'oldName\\\\b' src/ test/"\`. The \`!\` matters — \`grep\` exits 0 when it FINDS matches, which is the opposite of what we want here. The \`\\\\b\` word boundary avoids false positives on partial matches like \`oldNameSpace\`. Do NOT use \`git grep -l\` or bare \`grep\` for absence — they also exit 0 on found and would invert the test.
   - For **presence** verifications (a specific token must appear in a file), use \`grep -q\`: \`"grep -q 'newName' src/file.js"\`. \`grep -q\` exits 0 when matches are found.
+  - For **"don't modify this path"** verifications, use \`git diff --quiet main -- <path>\`. **Two things matter**: (1) the ref is \`main\`, NOT \`HEAD\` — \`HEAD\` is the agent's own commit after it edits, so \`git diff --quiet HEAD\` always exits 0 and the test is meaningless; \`main\` is the pre-agent baseline, so a real comparison happens. (2) Do NOT add \`!\` — \`git diff --quiet\` already exits 0 when there are NO changes (which is what we want for "this path was not touched"); adding \`!\` would invert that and fail when the agent does the right thing.
 
 # Three worked examples
 
@@ -132,6 +133,39 @@ Tool call:
 \`\`\`
 
 Note the \`!\` and the \`\\\\b\` word boundary in the grep command. Without \`!\`, the test would exit 0 when matches are found — inverting what we want. Without \`\\\\b\`, partial matches like \`oldNameSpace\` would trigger the test even after the rename succeeded.
+
+## Example D — test-only change with a "do not modify src/" guard
+
+This example shows the git-diff guard. The user wants the agent to add tests without changing source. Use \`git diff --quiet main -- src/\` (un-negated; ref is \`main\`, NOT \`HEAD\`).
+
+User input:
+> Task: Our \`isValidEmail\` function has thin test coverage. Add tests in \`test/email.test.js\` for: empty string, missing @, multiple @ signs, valid simple address, valid address with subdomain. Do not modify \`src/email.js\` — just add tests.
+
+Tool call:
+\`\`\`
+{
+  "kind": "spec",
+  "spec": {
+    "title": "Add edge-case tests for isValidEmail",
+    "description": "Extend \`test/email.test.js\` with edge-case coverage for the existing \`isValidEmail\` function: empty input, missing @, multiple @, valid simple form, valid with subdomain. Source file \`src/email.js\` must not be touched — this is a test-only change.",
+    "fileScope": ["test/email.test.js"],
+    "acceptanceCriteria": [
+      "test/email.test.js contains assertions for empty-string, missing-@, and multiple-@ cases",
+      "test/email.test.js contains assertions for a valid simple address and a subdomain address",
+      "src/email.js is unchanged from the initial commit",
+      "npm test passes"
+    ],
+    "testCommands": [
+      "npm test",
+      "git diff --quiet main -- src/"
+    ]
+  }
+}
+\`\`\`
+
+Why \`git diff --quiet main -- src/\` and not \`! git diff --quiet HEAD -- src/email.js\`?
+- **Ref is \`main\`, not \`HEAD\`.** \`HEAD\` is the agent's own commit after it edits — \`git diff --quiet HEAD\` always exits 0 and the test is meaningless. \`main\` is the pre-agent baseline.
+- **No \`!\` prefix.** \`git diff --quiet\` already exits 0 when there are NO changes (which is exactly the pass condition for "not modified"); negating with \`!\` would make the test pass only when the agent DID modify the file — the opposite of intent.
 `;
 
 export function buildTriageUserPrompt(

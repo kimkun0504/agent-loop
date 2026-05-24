@@ -33,23 +33,25 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
     expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('blank check');
   });
 
-  it('contains all three worked examples', () => {
+  it('contains all four worked examples', () => {
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example A');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example B');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example C');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Example D');
     // B is the vague-task → rejection example.
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Improve the performance');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('too_vague');
     // C is the rename → absence-verification example.
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Rename oldName to newName');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('! grep -rE');
+    // D is the test-only change with the git-diff guard.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Add edge-case tests for isValidEmail');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('git diff --quiet main -- src/');
   });
 
   it('teaches the negated-grep pattern for absence verifications', () => {
     // CHECKPOINT 2 surfaced that triage was producing non-negated grep
-    // for absence checks (`git grep -l`), inverting the test semantics
-    // and breaking rename-export. The prompt now explicitly warns
-    // about this pattern and points at the correct form.
+    // for absence checks (`git grep -l`), inverting the test semantics.
     expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('absence');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('! grep');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('git grep -l');
@@ -59,6 +61,17 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
   it('teaches grep -q for presence verifications', () => {
     expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('presence');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('grep -q');
+  });
+
+  it('teaches the git-diff pattern for "do not modify" verifications', () => {
+    // CHECKPOINT 3 surfaced triage producing `! git diff --quiet HEAD --
+    // src/file.js` instead of `git diff --quiet main -- src/`. Same
+    // semantic-inversion family as the CP2 grep bug. The prompt now
+    // calls out BOTH the wrong ref (HEAD vs main) AND the wrong
+    // negation (! prefix).
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('git diff --quiet main');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('NOT `HEAD`');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Do NOT add `!`');
   });
 });
 
