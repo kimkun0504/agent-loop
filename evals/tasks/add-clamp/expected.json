@@ -1,11 +1,11 @@
 {
   "acceptanceCriteria": [
     "clamp is exported from src/math.js",
-    "clamp(5, 0, 10) === 5 (value in range, returned unchanged)",
-    "clamp(-3, 0, 10) === 0 (value below min, returned as min)",
-    "clamp(99, 0, 10) === 10 (value above max, returned as max)",
-    "at least one test for clamp exists in test/",
-    "existing multiply test still passes"
+    "the diff contains a test that asserts clamp(5, 0, 10) returns 5 (a value in the range, unchanged) in a test file under test/",
+    "the diff contains a test that asserts clamp(-3, 0, 10) returns 0 (a value below min, returned as min) in a test file under test/",
+    "the diff contains a test that asserts clamp(99, 0, 10) returns 10 (a value above max, returned as max) in a test file under test/",
+    "existing multiply test still passes (no hunks remove or modify the multiply test)"
   ],
-  "testCommands": ["npm test", "grep -rE \"clamp\\(\" test/ > /dev/null"]
+  "testCommands": ["npm test"],
+  "calibrationTestCommands": ["grep -rE \"clamp\\(\" test/ > /dev/null"]
 }

@@ -93,21 +93,38 @@ function validateExpected(raw: unknown): EvalExpected {
   }
   const o = raw as Record<string, unknown>;
   const acceptance = o['acceptanceCriteria'];
-  if (!Array.isArray(acceptance)) throw new Error('acceptanceCriteria must be an array');
+  if (!Array.isArray(acceptance) || acceptance.length === 0) {
+    throw new Error('acceptanceCriteria must be a non-empty array');
+  }
   if (!acceptance.every((s) => typeof s === 'string')) {
     throw new Error('acceptanceCriteria must be strings');
   }
   const commands = o['testCommands'];
-  if (!Array.isArray(commands) || commands.length === 0) {
-    throw new Error('testCommands must be a non-empty array');
+  if (!Array.isArray(commands)) {
+    throw new Error('testCommands must be an array (may be empty)');
   }
   if (!commands.every((s) => typeof s === 'string')) {
     throw new Error('testCommands must be strings');
   }
-  return {
+  const calibration = o['calibrationTestCommands'];
+  let calibrationCommands: string[] | undefined;
+  if (calibration !== undefined) {
+    if (!Array.isArray(calibration)) {
+      throw new Error('calibrationTestCommands must be an array when present');
+    }
+    if (!calibration.every((s) => typeof s === 'string')) {
+      throw new Error('calibrationTestCommands must be strings');
+    }
+    calibrationCommands = calibration as string[];
+  }
+  const result: EvalExpected = {
     acceptanceCriteria: acceptance as string[],
     testCommands: commands as string[],
   };
+  if (calibrationCommands !== undefined) {
+    result.calibrationTestCommands = calibrationCommands;
+  }
+  return result;
 }
 
 function hasAnyFile(dir: string): boolean {

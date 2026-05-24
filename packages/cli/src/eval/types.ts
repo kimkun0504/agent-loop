@@ -7,6 +7,15 @@ import type { Phase, Failure } from '@agent-loop/core';
 export interface EvalExpected {
   acceptanceCriteria: string[];
   testCommands: string[];
+  /**
+   * Side-channel shell commands kept as a calibration anchor during the
+   * triage-verifier refactor (step 9 in docs/triage-verifier-refactor.md).
+   * Run alongside the semantic verifier in calibration mode; disagreements
+   * are surfaced in the eval report's "Calibration disagreements" section.
+   * Removal is gated on one full eval suite run with 0/M disagreements
+   * (see BACKLOG#gap-calibration-anchor-removal).
+   */
+  calibrationTestCommands?: string[];
 }
 
 export interface EvalTask {

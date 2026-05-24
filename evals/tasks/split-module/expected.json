@@ -2,13 +2,14 @@
   "acceptanceCriteria": [
     "src/utils/parse.js exists and exports parseUrl",
     "src/utils/format.js exists and exports formatUrl",
-    "src/utils.js no longer exists",
+    "src/utils.js has been deleted (the diff contains a deletion hunk for src/utils.js)",
     "src/api.js imports parseUrl from src/utils/parse.js and formatUrl from src/utils/format.js",
-    "test/utils.test.js imports from the new locations",
+    "test/utils.test.js imports parseUrl from the new location src/utils/parse.js",
+    "test/utils.test.js imports formatUrl from the new location src/utils/format.js",
     "all tests pass"
   ],
-  "testCommands": [
-    "npm test",
+  "testCommands": ["npm test"],
+  "calibrationTestCommands": [
     "test ! -f src/utils.js",
     "test -f src/utils/parse.js",
     "test -f src/utils/format.js"

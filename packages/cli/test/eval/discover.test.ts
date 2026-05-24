@@ -116,13 +116,49 @@ describe('discoverTasks', () => {
     expect(r.skipped[0]?.reason).toContain('empty');
   });
 
-  it('skips when expected.json has empty testCommands', () => {
-    makeTaskDir('no-cmd', {
-      expected: { acceptanceCriteria: [], testCommands: [] },
+  it('skips when expected.json has empty acceptanceCriteria', () => {
+    makeTaskDir('no-criteria', {
+      expected: { acceptanceCriteria: [], testCommands: ['npm test'] },
     });
     const r = discoverTasks(evalsRoot);
     expect(r.tasks).toEqual([]);
-    expect(r.skipped[0]?.reason).toContain('testCommands');
+    expect(r.skipped[0]?.reason).toContain('acceptanceCriteria');
+  });
+
+  it('accepts expected.json with empty testCommands (semantic-only verification)', () => {
+    makeTaskDir('docs-only', {
+      expected: { acceptanceCriteria: ['README is updated'], testCommands: [] },
+    });
+    const r = discoverTasks(evalsRoot);
+    expect(r.tasks).toHaveLength(1);
+    expect(r.tasks[0]?.expected.testCommands).toEqual([]);
+  });
+
+  it('reads calibrationTestCommands when present', () => {
+    makeTaskDir('with-anchor', {
+      expected: {
+        acceptanceCriteria: ['x is y'],
+        testCommands: ['npm test'],
+        calibrationTestCommands: ['! grep -r foo src/'],
+      },
+    });
+    const r = discoverTasks(evalsRoot);
+    expect(r.tasks[0]?.expected.calibrationTestCommands).toEqual([
+      '! grep -r foo src/',
+    ]);
+  });
+
+  it('rejects calibrationTestCommands that is not an array', () => {
+    makeTaskDir('bad-anchor', {
+      expected: {
+        acceptanceCriteria: ['x'],
+        testCommands: ['npm test'],
+        calibrationTestCommands: 'not an array' as unknown as string[],
+      },
+    });
+    const r = discoverTasks(evalsRoot);
+    expect(r.tasks).toEqual([]);
+    expect(r.skipped[0]?.reason).toContain('calibrationTestCommands');
   });
 
   it('skips when expected.json is malformed JSON', () => {
