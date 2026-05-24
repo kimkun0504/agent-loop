@@ -38,7 +38,7 @@ import {
 import type { Store } from '../db/store.js';
 import type { Executor } from '../executor/types.js';
 import type { PrOpener } from '../pr/types.js';
-import type { VerifyOptions } from '../verifier/exitCode.js';
+import type { VerifyOptions } from '../verifier/index.js';
 import { addWorktree, removeWorktree } from '../git/worktree.js';
 import { isStopRequested } from '../fs/stop.js';
 import { runCommand } from '../proc/run.js';

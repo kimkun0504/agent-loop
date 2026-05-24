@@ -35,11 +35,26 @@ export {
   type RunCommandOptions,
   type RunCommandResult,
 } from './proc/run.js';
+export { summarizeOutput } from './verifier/exitCode.js';
 export {
+  runVerifier,
   runExitCodeVerifier,
-  summarizeOutput,
+  runSemanticVerifier,
+  DEFAULT_SEMANTIC_MODEL,
   type VerifyOptions,
-} from './verifier/exitCode.js';
+  type RunVerifierOptions,
+  type RunVerifierResult,
+  type SemanticVerifierDeps,
+  type SemanticVerifierInput,
+  type SemanticVerifierOptions,
+  type SemanticVerifierResult,
+  type SemanticOnSdkError,
+} from './verifier/index.js';
+export {
+  getDiffSinceBase,
+  type GetDiffOptions,
+  type DiffRunner,
+} from './git/diff.js';
 export {
   type Executor,
   type ExecutorInput,
