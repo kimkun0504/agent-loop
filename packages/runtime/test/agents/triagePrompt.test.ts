@@ -33,12 +33,32 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
     expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('blank check');
   });
 
-  it('contains both worked examples', () => {
+  it('contains all three worked examples', () => {
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example A');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example B');
-    // The vague-task example becomes a rejection.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Example C');
+    // B is the vague-task → rejection example.
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Improve the performance');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('too_vague');
+    // C is the rename → absence-verification example.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Rename oldName to newName');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('! grep -rE');
+  });
+
+  it('teaches the negated-grep pattern for absence verifications', () => {
+    // CHECKPOINT 2 surfaced that triage was producing non-negated grep
+    // for absence checks (`git grep -l`), inverting the test semantics
+    // and breaking rename-export. The prompt now explicitly warns
+    // about this pattern and points at the correct form.
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('absence');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('! grep');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('git grep -l');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('word boundary');
+  });
+
+  it('teaches grep -q for presence verifications', () => {
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('presence');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('grep -q');
   });
 });
 

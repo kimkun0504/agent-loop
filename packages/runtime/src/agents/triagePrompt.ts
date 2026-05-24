@@ -50,8 +50,10 @@ When uncertain between spec and rejection, lean toward \`spec\`. The downstream 
 - \`testCommands\`: shell commands the verifier runs after the agent edits. All must exit 0 for the run to pass.
   - Default to \`["npm test"]\` unless the repo's package.json suggests otherwise.
   - For tasks like "don't modify the test file", add a second command like \`"git diff --quiet main -- test/"\`.
+  - For **absence** verifications (renames, removals — "no X remains anywhere"), use a NEGATED grep: \`"! grep -rE 'oldName\\\\b' src/ test/"\`. The \`!\` matters — \`grep\` exits 0 when it FINDS matches, which is the opposite of what we want here. The \`\\\\b\` word boundary avoids false positives on partial matches like \`oldNameSpace\`. Do NOT use \`git grep -l\` or bare \`grep\` for absence — they also exit 0 on found and would invert the test.
+  - For **presence** verifications (a specific token must appear in a file), use \`grep -q\`: \`"grep -q 'newName' src/file.js"\`. \`grep -q\` exits 0 when matches are found.
 
-# Two worked examples
+# Three worked examples
 
 ## Example A — actionable, becomes a spec
 
@@ -99,6 +101,37 @@ Tool call:
   }
 }
 \`\`\`
+
+## Example C — rename, becomes a spec with an absence-verification testCommand
+
+This example shows the negated-grep pattern in action. The verifier requires every testCommand to exit 0; \`! grep ...\` exits 0 when no matches are found, which is what we want for a "no token remains anywhere" check.
+
+User input:
+> Task: Rename \`oldName\` to \`newName\` everywhere it's used. Currently in \`src/handler.js\` and \`test/handler.test.js\`.
+
+Tool call:
+\`\`\`
+{
+  "kind": "spec",
+  "spec": {
+    "title": "Rename oldName to newName",
+    "description": "Rename the exported \`oldName\` symbol in \`src/handler.js\` to \`newName\`. Update the import in \`test/handler.test.js\` and any other references. After the change, \`oldName\` should not appear as a token anywhere under \`src/\` or \`test/\`.",
+    "fileScope": ["src/handler.js", "test/handler.test.js"],
+    "acceptanceCriteria": [
+      "the export in src/handler.js is named newName",
+      "test/handler.test.js imports newName, not oldName",
+      "no occurrence of the token oldName remains under src/ or test/",
+      "all tests pass"
+    ],
+    "testCommands": [
+      "npm test",
+      "! grep -rE 'oldName\\\\b' src/ test/"
+    ]
+  }
+}
+\`\`\`
+
+Note the \`!\` and the \`\\\\b\` word boundary in the grep command. Without \`!\`, the test would exit 0 when matches are found — inverting what we want. Without \`\\\\b\`, partial matches like \`oldNameSpace\` would trigger the test even after the rename succeeded.
 `;
 
 export function buildTriageUserPrompt(
