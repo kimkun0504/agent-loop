@@ -46,6 +46,28 @@ const CONTEXT_SEEKING_PHRASES = [
   'not clear from',
 ] as const;
 
+/**
+ * Detects the compound runtime-claim anti-pattern in triage's
+ * acceptanceCriteria output. Matches a conjunction word followed by
+ * up to 60 characters followed by a runtime-claim keyword.
+ *
+ * Examples that match:
+ *   - "X exists and it still passes"
+ *   - "Y remains unchanged and continues to pass"
+ *   - "Z is correct, plus the new tests pass"
+ *
+ * Examples that do NOT match:
+ *   - "X exists and Y exists" (no runtime keyword)
+ *   - "passes the test for X" (no preceding conjunction)
+ *
+ * Tunable. Specified in the gate fix (Part B of the second-round
+ * triage anti-pattern work). The triage system prompt's anti-pattern
+ * section calls out the same pattern; this meta-test fires on
+ * triage output, so the two reinforce each other.
+ */
+export const COMPOUND_RUNTIME_CLAIM_REGEX =
+  /\b(and|also|plus|while|moreover)\s+.{0,60}\b(pass(es)?|build succeeds|works correctly|run correctly|no regressions)/i;
+
 export interface PlannerSignals {
   /** Tasks where a planner.json artifact was found. */
   withPlannerOutput: number;
@@ -65,9 +87,23 @@ export interface PlanQualityMismatch {
   failureCategory: string;
 }
 
+/**
+ * A compound runtime-claim shape detected in triage's acceptanceCriteria.
+ * One entry per offending criterion (a task can have multiple).
+ */
+export interface TriageAntiPatternViolation {
+  /** Eval task name. */
+  task: string;
+  /** Index into the spec's acceptanceCriteria array (0-based). */
+  criterionIndex: number;
+  /** The offending criterion text, verbatim. */
+  criterion: string;
+}
+
 export interface InstrumentationResult {
   plannerSignals: PlannerSignals;
   planQualityMismatches: PlanQualityMismatch[];
+  triageAntiPatternViolations: TriageAntiPatternViolation[];
 }
 
 /**
@@ -87,6 +123,7 @@ export function instrument(
     perTask: [],
   };
   const planQualityMismatches: PlanQualityMismatch[] = [];
+  const triageAntiPatternViolations: TriageAntiPatternViolation[] = [];
 
   for (const t of perTask) {
     const taskDir = join(resultsDir, t.name);
@@ -120,6 +157,26 @@ export function instrument(
         failureCategory: t.failure.category,
       });
     }
+
+    // Triage anti-pattern meta-test: scan acceptanceCriteria for
+    // compound runtime claims. The triage system prompt's anti-pattern
+    // section forbids these; this meta-test catches leaks. Surfacing
+    // violations decouples "the verifier got lucky" from "triage
+    // produced clean output" — see CHECKPOINT 3 round 2 retro.
+    const triageFile = findTriageJson(taskDir);
+    if (triageFile) {
+      const criteria = extractAcceptanceCriteria(triageFile);
+      for (let i = 0; i < criteria.length; i++) {
+        const criterion = criteria[i]!;
+        if (COMPOUND_RUNTIME_CLAIM_REGEX.test(criterion)) {
+          triageAntiPatternViolations.push({
+            task: t.name,
+            criterionIndex: i,
+            criterion,
+          });
+        }
+      }
+    }
   }
 
   plannerSignals.contextSeekingRate =
@@ -127,7 +184,7 @@ export function instrument(
       ? 0
       : plannerSignals.contextSeekingCount / plannerSignals.withPlannerOutput;
 
-  return { plannerSignals, planQualityMismatches };
+  return { plannerSignals, planQualityMismatches, triageAntiPatternViolations };
 }
 
 /**
@@ -212,4 +269,42 @@ function analyzePlannerFile(path: string): PlannerAnalysis | null {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function findTriageJson(taskDir: string): string | null {
+  if (!existsSync(taskDir)) return null;
+  try {
+    for (const child of readdirSync(taskDir)) {
+      const candidate = join(taskDir, child, 'triage.json');
+      if (existsSync(candidate) && statSync(candidate).isFile()) {
+        return candidate;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Pull `acceptanceCriteria` (array of strings) from a triage.json file.
+ * Returns [] for triage-rejection cases (no spec produced) and on any
+ * parse/shape error — the meta-test then trivially passes for that task,
+ * which is the conservative behavior.
+ */
+function extractAcceptanceCriteria(path: string): string[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return [];
+  }
+  if (!isRecord(raw)) return [];
+  const result = raw['result'];
+  if (!isRecord(result) || result['ok'] !== true) return [];
+  const spec = result['spec'];
+  if (!isRecord(spec)) return [];
+  const criteria = spec['acceptanceCriteria'];
+  if (!Array.isArray(criteria)) return [];
+  return criteria.filter((c): c is string => typeof c === 'string');
 }

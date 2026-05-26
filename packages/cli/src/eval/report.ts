@@ -41,6 +41,10 @@ export async function writeResults(
   if (instrumentation.planQualityMismatches.length > 0) {
     summary.planQualityMismatches = instrumentation.planQualityMismatches;
   }
+  if (instrumentation.triageAntiPatternViolations.length > 0) {
+    summary.triageAntiPatternViolations =
+      instrumentation.triageAntiPatternViolations;
+  }
 
   // schemaVersion is added under the same _schemaVersion key used by other
   // artifacts in the project (executor.json, meta.json, etc.). Keeping the
@@ -124,6 +128,21 @@ function formatReportMd(s: EvalSummary): string {
     lines.push('');
     for (const m of s.planQualityMismatches) {
       lines.push(`- \`${m.name}\`: failed at ${m.failedPhase} with [${m.failureCategory}]`);
+    }
+    lines.push('');
+  }
+
+  if (s.triageAntiPatternViolations && s.triageAntiPatternViolations.length > 0) {
+    lines.push('## Triage anti-pattern violations');
+    lines.push('');
+    lines.push(
+      `Compound runtime-claim shapes detected in triage's \`acceptanceCriteria\` output. The triage system prompt forbids these (see gap-triage-testcommand-pattern-debt iteration #2); this meta-test surfaces leaks. **The CHECKPOINT 3 gate requires zero violations** in addition to ≥7/8 pass rate; the gate-clearing run requires both signals clean across 5 consecutive runs.`,
+    );
+    lines.push('');
+    for (const v of s.triageAntiPatternViolations) {
+      lines.push(
+        `- \`${v.task}\` criterion #${v.criterionIndex + 1}: ${JSON.stringify(v.criterion)}`,
+      );
     }
     lines.push('');
   }

@@ -85,4 +85,16 @@ export interface EvalSummary {
     failedPhase: string;
     failureCategory: string;
   }>;
+  /**
+   * Compound runtime-claim anti-pattern violations detected in triage's
+   * acceptanceCriteria output. Empty array (or absent) means no
+   * violations. The CHECKPOINT 3 gate (round 2) requires zero
+   * violations across 5 consecutive runs in addition to ≥7/8 pass rate.
+   * See gap-triage-testcommand-pattern-debt in BACKLOG.md.
+   */
+  triageAntiPatternViolations?: Array<{
+    task: string;
+    criterionIndex: number;
+    criterion: string;
+  }>;
 }

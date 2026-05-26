@@ -195,6 +195,152 @@ describe('instrument: plan-quality mismatches', () => {
   });
 });
 
+// Helper for triage anti-pattern tests.
+function makeTriageJson(
+  taskName: string,
+  runId: string,
+  acceptanceCriteria: string[],
+): void {
+  const dir = join(root, taskName, runId);
+  mkdirSync(dir, { recursive: true });
+  const result = {
+    ok: true,
+    spec: {
+      title: 't',
+      description: 'd',
+      fileScope: ['src/**'],
+      acceptanceCriteria,
+      testCommands: ['npm test'],
+    },
+    usages: [],
+  };
+  writeFileSync(
+    join(dir, 'triage.json'),
+    JSON.stringify({ schemaVersion: 1, result, durationMs: 1234 }),
+  );
+}
+
+describe('instrument: triage anti-pattern meta-test', () => {
+  // The regex: /\b(and|also|plus|while|moreover)\s+.{0,60}\b(pass(es)?|build succeeds|works correctly|run correctly|no regressions)/i
+
+  it('detects "X exists and it still passes" compound', () => {
+    makeTriageJson('t1', 'eval-t1', [
+      'src/foo.js exports a parse function',
+      'test/foo.test.js contains a test for X and it still passes',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(1);
+    expect(r.triageAntiPatternViolations[0]?.criterionIndex).toBe(1);
+    expect(r.triageAntiPatternViolations[0]?.criterion).toMatch(/still passes/);
+  });
+
+  it('detects "remains unchanged and continues to pass"', () => {
+    makeTriageJson('t1', 'eval-t1', [
+      'the existing test in test/bar.test.js remains unchanged and continues to pass',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(1);
+  });
+
+  it('detects "X exports Y and the new tests pass"', () => {
+    makeTriageJson('t1', 'eval-t1', [
+      'src/baz.js exports parseQuux and the new tests pass',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(1);
+  });
+
+  it('detects "also" / "plus" / "while" / "moreover" conjunctions', () => {
+    makeTriageJson('multi', 'eval-multi', [
+      'X exists, also the tests pass',
+      'Y is present plus the build succeeds',
+      'Z is correct while existing tests still pass',
+      'W is set up; moreover the new tests pass',
+    ]);
+    const r = instrument(root, [mkResult({ name: 'multi' })]);
+    expect(r.triageAntiPatternViolations.length).toBe(4);
+  });
+
+  it('does NOT flag observable-only criteria', () => {
+    makeTriageJson('t1', 'eval-t1', [
+      'src/foo.js exports a parse function',
+      'no occurrence of the token parseDate remains anywhere under src/',
+      'test/email.test.js contains an assertion for the empty-string case',
+      'src/email.js is unchanged from the initial commit',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('does NOT flag "and" without a runtime keyword nearby', () => {
+    makeTriageJson('t1', 'eval-t1', [
+      'src/foo.js exports parse and src/bar.js imports it',
+      'test file contains assertion for empty input and an assertion for whitespace',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('does NOT flag a runtime keyword without a preceding conjunction', () => {
+    makeTriageJson('t1', 'eval-t1', [
+      // The regex requires a conjunction BEFORE the runtime keyword.
+      'parseInt32 passes through valid inputs unchanged',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('records the actual CHECKPOINT 3 round-2 failing criterion', () => {
+    makeTriageJson('add-clamp', 'eval-add-clamp', [
+      'test/math.test.js contains a test for the multiply function and it still passes',
+    ]);
+    const r = instrument(root, [mkResult({ name: 'add-clamp' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(1);
+    expect(r.triageAntiPatternViolations[0]?.task).toBe('add-clamp');
+  });
+
+  it('aggregates violations across multiple tasks', () => {
+    makeTriageJson('a', 'eval-a', [
+      'src/foo.js exports parse and the tests pass',
+    ]);
+    makeTriageJson('b', 'eval-b', [
+      'b is correct (no anti-pattern here)',
+    ]);
+    makeTriageJson('c', 'eval-c', [
+      'test/c.test.js contains an assertion and it still passes',
+      'src/c.js exports cFunc',
+    ]);
+    const r = instrument(root, [
+      mkResult({ name: 'a' }),
+      mkResult({ name: 'b' }),
+      mkResult({ name: 'c' }),
+    ]);
+    expect(r.triageAntiPatternViolations).toHaveLength(2);
+    expect(r.triageAntiPatternViolations.map((v) => v.task).sort()).toEqual(['a', 'c']);
+  });
+
+  it('skips tasks with no triage.json (triage-rejection or baseline mode)', () => {
+    // task with no triage.json at all
+    const r = instrument(root, [mkResult({ name: 'no-triage' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('skips triage-rejection results (ok:false specs)', () => {
+    const dir = join(root, 'rejected', 'eval-rejected');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'triage.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        result: { ok: false, reason: 'too_vague', message: 'x', usages: [] },
+        durationMs: 100,
+      }),
+    );
+    const r = instrument(root, [mkResult({ name: 'rejected' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+});
+
 describe('formatPerPhaseCost', () => {
   it('renders a markdown table of per-phase metrics', () => {
     const out = formatPerPhaseCost(
