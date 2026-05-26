@@ -155,4 +155,16 @@ describe('applyMigrations', () => {
     expect(col).toBeDefined();
     expect(col?.notnull).toBe(0);
   });
+
+  it('specs.file_state_checks_json column exists and is nullable after migration #6', () => {
+    const db = freshDb();
+    applyMigrations(db);
+    const cols = db.prepare('PRAGMA table_info(specs)').all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const col = cols.find((c) => c.name === 'file_state_checks_json');
+    expect(col).toBeDefined();
+    expect(col?.notnull).toBe(0);
+  });
 });

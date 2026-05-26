@@ -168,4 +168,17 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       ALTER TABLE verdicts ADD COLUMN calibration_anchor_json TEXT;
     `,
   },
+  {
+    id: 6,
+    name: 'specs_file_state_checks',
+    sql: `
+      -- Option E (docs/triage-file-reference-rethink.md): structured
+      -- file-state assertions live on the Spec as a JSON array of
+      -- { type, path } objects. The verifier translates each entry
+      -- to deterministic shell mechanically — no LLM judgment needed
+      -- for file existence / unchanged / deleted state. Nullable for
+      -- backward compatibility with pre-Option-E specs.
+      ALTER TABLE specs ADD COLUMN file_state_checks_json TEXT;
+    `,
+  },
 ];

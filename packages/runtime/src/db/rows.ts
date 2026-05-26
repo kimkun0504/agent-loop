@@ -21,6 +21,7 @@ import {
   type Budget,
   type PlannedFileChange,
   type TestResult,
+  type FileStateCheck,
   type Phase,
   type Event,
   type Task,
@@ -102,12 +103,13 @@ export interface SpecRow {
   file_scope_json: string;
   acceptance_json: string;
   test_commands_json: string;
+  file_state_checks_json: string | null;
   budget_json: string;
   created_at: string;
 }
 
 export function rowToSpec(row: SpecRow): Spec {
-  return {
+  const spec: Spec = {
     id: SpecId(row.id),
     runId: RunId(row.run_id),
     title: row.title,
@@ -118,6 +120,12 @@ export function rowToSpec(row: SpecRow): Spec {
     budget: JSON.parse(row.budget_json) as Budget,
     createdAt: row.created_at,
   };
+  if (row.file_state_checks_json !== null) {
+    spec.fileStateChecks = JSON.parse(
+      row.file_state_checks_json,
+    ) as FileStateCheck[];
+  }
+  return spec;
 }
 
 export function specToParams(spec: Spec): SpecRow {
@@ -129,6 +137,10 @@ export function specToParams(spec: Spec): SpecRow {
     file_scope_json: JSON.stringify(spec.fileScope),
     acceptance_json: JSON.stringify(spec.acceptanceCriteria),
     test_commands_json: JSON.stringify(spec.testCommands),
+    file_state_checks_json:
+      spec.fileStateChecks !== undefined
+        ? JSON.stringify(spec.fileStateChecks)
+        : null,
     budget_json: JSON.stringify(spec.budget),
     created_at: spec.createdAt,
   };

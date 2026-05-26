@@ -112,10 +112,12 @@ export class Store {
       insertSpec: db.prepare(
         `INSERT INTO specs
           (id, run_id, title, description, file_scope_json,
-           acceptance_json, test_commands_json, budget_json, created_at)
+           acceptance_json, test_commands_json, file_state_checks_json,
+           budget_json, created_at)
          VALUES
           (@id, @run_id, @title, @description, @file_scope_json,
-           @acceptance_json, @test_commands_json, @budget_json, @created_at)`,
+           @acceptance_json, @test_commands_json, @file_state_checks_json,
+           @budget_json, @created_at)`,
       ),
       getPlanByRun: db.prepare('SELECT * FROM plans WHERE run_id = ?'),
       insertPlan: db.prepare(

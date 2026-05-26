@@ -188,6 +188,28 @@ describe('Store: specs', () => {
     expect(() => store.insertSpec({ ...sampleSpec(), id: SpecId('spec-other') }))
       .toThrow(/UNIQUE/i);
   });
+
+  it('round-trips fileStateChecks when present', () => {
+    const spec = {
+      ...sampleSpec(),
+      fileStateChecks: [
+        { type: 'unchanged' as const, path: 'src/foo.js' },
+        { type: 'deleted' as const, path: 'src/old.js' },
+        { type: 'exists' as const, path: 'src/new.js' },
+        { type: 'absent' as const, path: 'src/never.js' },
+      ],
+    };
+    store.insertSpec(spec);
+    const back = store.getSpec(spec.id)!;
+    expect(back.fileStateChecks).toEqual(spec.fileStateChecks);
+  });
+
+  it('omits fileStateChecks when absent (back-compat with pre-Option-E specs)', () => {
+    const spec = sampleSpec(); // no fileStateChecks
+    store.insertSpec(spec);
+    const back = store.getSpec(spec.id)!;
+    expect(back.fileStateChecks).toBeUndefined();
+  });
 });
 
 describe('Store: plans', () => {
