@@ -57,13 +57,6 @@ export interface RunOneOptions {
   withTriage?: boolean;
   /** Required when withTriage is true. */
   anthropicClient?: AnthropicClient;
-  /**
-   * Enable calibration mode: run the deprecated shell commands from
-   * `expected.calibrationTestCommands` as a side-channel anchor alongside
-   * the semantic verifier. Disagreements get warn-logged + surfaced in the
-   * report. Verdict authority stays with the semantic verifier. Default false.
-   */
-  calibrationMode?: boolean;
 }
 
 export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
@@ -130,22 +123,12 @@ export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
       executor: new ClaudeCliExecutor(),
       // Pass the same Anthropic client through to the semantic verifier
       // (Sonnet). The composer handles the no-client case (exit-code only)
-      // for callers that haven't loaded credentials. Calibration mode is
-      // signal-only and gated on opts.calibrationMode + the task's
-      // calibrationTestCommands field.
+      // for callers that haven't loaded credentials.
       verifier: (run, spec, options) =>
         runVerifier(run, spec, {
           ...options,
           ...(opts.anthropicClient !== undefined
             ? { client: opts.anthropicClient }
-            : {}),
-          ...(opts.calibrationMode === true &&
-          opts.task.expected.calibrationTestCommands !== undefined
-            ? {
-                calibrationMode: true,
-                calibrationTestCommands:
-                  opts.task.expected.calibrationTestCommands,
-              }
             : {}),
         }),
       prOpener: new NoopPrOpener(),
@@ -217,7 +200,7 @@ function summarize(store: Store, name: string, runId: RunId): EvalTaskResult {
   const passed =
     finalRun.phase === 'done' && lastVerdict?.pass === true;
 
-  const result: EvalTaskResult = {
+  return {
     name,
     passed,
     phase: finalRun.phase,
@@ -232,16 +215,4 @@ function summarize(store: Store, name: string, runId: RunId): EvalTaskResult {
     perPhase: metrics.perPhase,
     failure: finalRun.failure ?? null,
   };
-  if (lastVerdict?.calibrationAnchor) {
-    result.calibrationAnchor = {
-      commands: [...lastVerdict.calibrationAnchor.commands],
-      exitCodes: [...lastVerdict.calibrationAnchor.exitCodes],
-      anchorPass: lastVerdict.calibrationAnchor.anchorPass,
-      agreement: lastVerdict.calibrationAnchor.agreement,
-    };
-  }
-  if (lastVerdict?.semanticCheck?.reasoning) {
-    result.semanticReasoning = lastVerdict.semanticCheck.reasoning;
-  }
-  return result;
 }

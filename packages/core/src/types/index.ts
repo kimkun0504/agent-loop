@@ -222,13 +222,6 @@ export interface Verdict {
      */
     perCriterion?: PerCriterionJudgment[];
   };
-  /**
-   * Side-channel comparison against the deprecated shell testCommands.
-   * Set only during calibration runs (eval suite with --calibration-mode).
-   * Production runs never see this field. Tracks the
-   * gap-calibration-anchor-removal removal gate.
-   */
-  calibrationAnchor?: CalibrationAnchorResult;
   createdAt: string;
 }
 
@@ -242,20 +235,6 @@ export interface PerCriterionJudgment {
   criterion: string;
   met: boolean;
   reasoning: string;
-}
-
-/**
- * Result of running the calibration anchor's shell commands alongside
- * the semantic verifier. Authority rule: the semantic verdict is
- * authoritative for the run's pass/fail; the anchor produces signal
- * only. Disagreement (anchor.anchorPass !== verdict.semanticCheck.matches)
- * is warn-logged and surfaced in the eval report.
- */
-export interface CalibrationAnchorResult {
-  commands: string[];
-  exitCodes: number[];
-  anchorPass: boolean;
-  agreement: boolean;
 }
 
 export interface TestResult {

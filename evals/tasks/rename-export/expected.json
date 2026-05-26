@@ -6,6 +6,5 @@
     "no occurrence of the token parseDate (as a whole word) remains anywhere under src/ or test/",
     "npm test still passes"
   ],
-  "testCommands": ["npm test"],
-  "calibrationTestCommands": ["! grep -rE 'parseDate\\b' src/ test/"]
+  "testCommands": ["npm test"]
 }

@@ -134,33 +134,6 @@ describe('discoverTasks', () => {
     expect(r.tasks[0]?.expected.testCommands).toEqual([]);
   });
 
-  it('reads calibrationTestCommands when present', () => {
-    makeTaskDir('with-anchor', {
-      expected: {
-        acceptanceCriteria: ['x is y'],
-        testCommands: ['npm test'],
-        calibrationTestCommands: ['! grep -r foo src/'],
-      },
-    });
-    const r = discoverTasks(evalsRoot);
-    expect(r.tasks[0]?.expected.calibrationTestCommands).toEqual([
-      '! grep -r foo src/',
-    ]);
-  });
-
-  it('rejects calibrationTestCommands that is not an array', () => {
-    makeTaskDir('bad-anchor', {
-      expected: {
-        acceptanceCriteria: ['x'],
-        testCommands: ['npm test'],
-        calibrationTestCommands: 'not an array' as unknown as string[],
-      },
-    });
-    const r = discoverTasks(evalsRoot);
-    expect(r.tasks).toEqual([]);
-    expect(r.skipped[0]?.reason).toContain('calibrationTestCommands');
-  });
-
   it('skips when expected.json is malformed JSON', () => {
     const dir = join(evalsRoot, 'tasks', 'bad');
     mkdirSync(join(dir, 'base'), { recursive: true });

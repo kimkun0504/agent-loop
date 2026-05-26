@@ -16,7 +16,6 @@ import {
   type Spec,
   type Plan,
   type Verdict,
-  type CalibrationAnchorResult,
   type PerCriterionJudgment,
   type Failure,
   type Budget,
@@ -178,13 +177,20 @@ export function planToParams(plan: Plan): PlanRow {
  * multiple appear per run (week 3+). The domain `Verdict` type has no id;
  * the row converter drops it on read and omits it on write.
  */
+/**
+ * The verdicts table also has a `calibration_anchor_json` column added in
+ * migration #5 for the calibration anchor feature. The anchor was removed
+ * after the triage↔verifier refactor's gate fired (BACKLOG#gap-calibration-
+ * anchor-removal). The column is vestigial: we don't read or write it.
+ * Removing the column itself would require a new migration; left in place
+ * to honor the "never edit an existing migration" rule.
+ */
 export interface VerdictRow {
   id: number;
   run_id: string;
   pass: number; // 0 or 1; SQLite has no boolean
   test_results_json: string;
   semantic_check_json: string;
-  calibration_anchor_json: string | null;
   created_at: string;
 }
 
@@ -193,12 +199,11 @@ export interface VerdictInsertParams {
   pass: number;
   test_results_json: string;
   semantic_check_json: string;
-  calibration_anchor_json: string | null;
   created_at: string;
 }
 
 export function rowToVerdict(row: VerdictRow): Verdict {
-  const verdict: Verdict = {
+  return {
     runId: RunId(row.run_id),
     pass: row.pass === 1,
     testResults: JSON.parse(row.test_results_json) as TestResult[],
@@ -209,12 +214,6 @@ export function rowToVerdict(row: VerdictRow): Verdict {
     },
     createdAt: row.created_at,
   };
-  if (row.calibration_anchor_json !== null) {
-    verdict.calibrationAnchor = JSON.parse(
-      row.calibration_anchor_json,
-    ) as CalibrationAnchorResult;
-  }
-  return verdict;
 }
 
 export function verdictToParams(verdict: Verdict): VerdictInsertParams {
@@ -223,10 +222,6 @@ export function verdictToParams(verdict: Verdict): VerdictInsertParams {
     pass: verdict.pass ? 1 : 0,
     test_results_json: JSON.stringify(verdict.testResults),
     semantic_check_json: JSON.stringify(verdict.semanticCheck),
-    calibration_anchor_json:
-      verdict.calibrationAnchor !== undefined
-        ? JSON.stringify(verdict.calibrationAnchor)
-        : null,
     created_at: verdict.createdAt,
   };
 }

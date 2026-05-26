@@ -15,10 +15,13 @@
  * verifier (Path A in the design — the caller in tickVerifying applies
  * record_token_usage events).
  *
- * The calibration anchor (step 9) plugs in here: when enabled, it runs
- * the deprecated shell testCommands and attaches a CalibrationAnchorResult
- * to the verdict. This file gains the anchor wiring in step 9; the shape
- * is defined now (Path A returns usages, opts carries calibration config).
+ * (Earlier versions of this module also ran a calibration anchor as a
+ * side-channel comparison against the deprecated shell testCommands.
+ * The anchor served its purpose during the triage↔verifier refactor —
+ * one full eval-suite run with 0/M disagreements proved the semantic
+ * verifier was correctly calibrated — and was then removed per
+ * BACKLOG#gap-calibration-anchor-removal. See commit history for the
+ * anchor's life cycle.)
  */
 
 import {
@@ -36,10 +39,6 @@ import {
 import type { SemanticDebug } from './semanticSchema.js';
 import type { AnthropicClient } from '../agents/sdkClient.js';
 import { getDiffSinceBase, type DiffRunner } from '../git/diff.js';
-import {
-  runCalibrationAnchor,
-  type AnchorRunner,
-} from './calibrationAnchor.js';
 
 export { runExitCodeVerifier } from './exitCode.js';
 export {
@@ -66,17 +65,6 @@ export interface RunVerifierOptions extends VerifyOptions {
   baseRef?: string;
   /** Git diff runner override (testing seam). */
   diffRunner?: DiffRunner;
-  /**
-   * Calibration mode — when true AND calibrationTestCommands is non-empty,
-   * the deprecated shell commands run alongside the semantic verifier as
-   * a side-channel anchor. Production runs leave this false. Set by the
-   * eval drive when invoked with --calibration-mode.
-   */
-  calibrationMode?: boolean;
-  /** Old shell testCommands kept as the calibration anchor. */
-  calibrationTestCommands?: ReadonlyArray<string>;
-  /** Calibration-anchor runner override (testing seam). */
-  calibrationRunner?: AnchorRunner;
 }
 
 export interface RunVerifierResult {
@@ -109,18 +97,10 @@ export async function runVerifier(
       'verifier: exit-code tests failed; skipping semantic verification',
       { runId: run.id },
     );
-    const skipped = skippedSemantic(
-      exitVerdict,
-      'exit-code tests failed; semantic verification skipped (fail-closed at exit-code gate)',
-    );
-    // Run anchor even on exit-code fail — the disagreement signal is most
-    // useful when one side fails and the other doesn't. The semantic side
-    // didn't run, so we treat it as matching the exit-code outcome (false).
     return {
-      verdict: await maybeAttachAnchor(
-        skipped,
-        { exitCodePass: false, semanticMatches: false },
-        options,
+      verdict: skippedSemantic(
+        exitVerdict,
+        'exit-code tests failed; semantic verification skipped (fail-closed at exit-code gate)',
       ),
       usages: [],
     };
@@ -131,15 +111,10 @@ export async function runVerifier(
       'verifier: no Anthropic client provided; running exit-code only',
       { runId: run.id },
     );
-    const skipped = skippedSemantic(
-      exitVerdict,
-      'semantic verifier disabled: no Anthropic client provided',
-    );
     return {
-      verdict: await maybeAttachAnchor(
-        skipped,
-        { exitCodePass: true, semanticMatches: true },
-        options,
+      verdict: skippedSemantic(
+        exitVerdict,
+        'semantic verifier disabled: no Anthropic client provided',
       ),
       usages: [],
     };
@@ -149,15 +124,10 @@ export async function runVerifier(
     logger?.info('verifier: spec has no acceptance criteria; semantic step trivially passes', {
       runId: run.id,
     });
-    const skipped = skippedSemantic(
-      exitVerdict,
-      'no acceptance criteria; semantic verifier had nothing to judge',
-    );
     return {
-      verdict: await maybeAttachAnchor(
-        skipped,
-        { exitCodePass: true, semanticMatches: true },
-        options,
+      verdict: skippedSemantic(
+        exitVerdict,
+        'no acceptance criteria; semantic verifier had nothing to judge',
       ),
       usages: [],
     };
@@ -193,15 +163,10 @@ export async function runVerifier(
         'verifier: semantic step skipped due to SDK error; exit-code verdict stands',
         { runId: run.id, message: semantic.message },
       );
-      const skipped = skippedSemantic(
-        exitVerdict,
-        `semantic step skipped: ${semantic.message}`,
-      );
       return {
-        verdict: await maybeAttachAnchor(
-          skipped,
-          { exitCodePass: true, semanticMatches: true },
-          options,
+        verdict: skippedSemantic(
+          exitVerdict,
+          `semantic step skipped: ${semantic.message}`,
         ),
         usages: semantic.usages,
       };
@@ -216,11 +181,7 @@ export async function runVerifier(
       },
     };
     const result: RunVerifierResult = {
-      verdict: await maybeAttachAnchor(
-        failed,
-        { exitCodePass: true, semanticMatches: false },
-        options,
-      ),
+      verdict: failed,
       usages: semantic.usages,
     };
     if (semantic.debug !== undefined) result.semanticDebug = semantic.debug;
@@ -241,41 +202,11 @@ export async function runVerifier(
     },
   };
   const result: RunVerifierResult = {
-    verdict: await maybeAttachAnchor(
-      composed,
-      { exitCodePass: exitVerdict.pass, semanticMatches: semantic.matches },
-      options,
-    ),
+    verdict: composed,
     usages: semantic.usages,
   };
   if (semantic.debug !== undefined) result.semanticDebug = semantic.debug;
   return result;
-}
-
-async function maybeAttachAnchor(
-  verdict: Verdict,
-  outcome: { exitCodePass: boolean; semanticMatches: boolean },
-  options: RunVerifierOptions,
-): Promise<Verdict> {
-  if (
-    options.calibrationMode !== true ||
-    !options.calibrationTestCommands ||
-    options.calibrationTestCommands.length === 0
-  ) {
-    return verdict;
-  }
-  const anchor = await runCalibrationAnchor(
-    options.calibrationTestCommands,
-    outcome,
-    {
-      cwd: options.cwd,
-      ...(options.calibrationRunner !== undefined
-        ? { runner: options.calibrationRunner }
-        : {}),
-      ...(options.logger !== undefined ? { logger: options.logger } : {}),
-    },
-  );
-  return { ...verdict, calibrationAnchor: anchor };
 }
 
 function skippedSemantic(exitVerdict: Verdict, reasoning: string): Verdict {

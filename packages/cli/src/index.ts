@@ -67,11 +67,6 @@ async function main(argv: string[]): Promise<number> {
     .option('--output-dir <path>', 'Write results under this dir instead of evals/results/<ts>/')
     .option('--verbose', 'Stream per-tick log output to stdout', false)
     .option('--with-triage', 'Drive runs through real triage (Phase D)', false)
-    .option(
-      '--calibration-mode',
-      'Run deprecated shell testCommands from expected.json.calibrationTestCommands as a side-channel anchor; surface disagreements in the report (signal only, semantic verifier remains authoritative)',
-      false,
-    )
     .action(async (opts) => {
       process.exit(
         await evalCmd({
@@ -79,7 +74,6 @@ async function main(argv: string[]): Promise<number> {
           outputDir: opts.outputDir,
           verbose: Boolean(opts.verbose),
           withTriage: Boolean(opts.withTriage),
-          calibrationMode: Boolean(opts.calibrationMode),
         }),
       );
     });

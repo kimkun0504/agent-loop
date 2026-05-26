@@ -106,25 +106,10 @@ function validateExpected(raw: unknown): EvalExpected {
   if (!commands.every((s) => typeof s === 'string')) {
     throw new Error('testCommands must be strings');
   }
-  const calibration = o['calibrationTestCommands'];
-  let calibrationCommands: string[] | undefined;
-  if (calibration !== undefined) {
-    if (!Array.isArray(calibration)) {
-      throw new Error('calibrationTestCommands must be an array when present');
-    }
-    if (!calibration.every((s) => typeof s === 'string')) {
-      throw new Error('calibrationTestCommands must be strings');
-    }
-    calibrationCommands = calibration as string[];
-  }
-  const result: EvalExpected = {
+  return {
     acceptanceCriteria: acceptance as string[],
     testCommands: commands as string[],
   };
-  if (calibrationCommands !== undefined) {
-    result.calibrationTestCommands = calibrationCommands;
-  }
-  return result;
 }
 
 function hasAnyFile(dir: string): boolean {

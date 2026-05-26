@@ -8,10 +8,5 @@
     "test/utils.test.js imports formatUrl from the new location src/utils/format.js",
     "all tests pass"
   ],
-  "testCommands": ["npm test"],
-  "calibrationTestCommands": [
-    "test ! -f src/utils.js",
-    "test -f src/utils/parse.js",
-    "test -f src/utils/format.js"
-  ]
+  "testCommands": ["npm test"]
 }

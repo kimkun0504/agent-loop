@@ -6,6 +6,5 @@
     "test/normalize.test.js is unchanged from the initial commit",
     "npm test still passes"
   ],
-  "testCommands": ["npm test"],
-  "calibrationTestCommands": ["git diff --quiet main -- test/"]
+  "testCommands": ["npm test"]
 }

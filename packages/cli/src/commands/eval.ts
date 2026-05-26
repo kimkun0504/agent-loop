@@ -39,13 +39,6 @@ export interface EvalOptions {
   verbose?: boolean;
   /** Phase D: drive runs through real triage (requires ANTHROPIC_API_KEY). */
   withTriage?: boolean;
-  /**
-   * Calibration mode for the triage-verifier refactor's side-channel anchor.
-   * Runs deprecated shell testCommands alongside the semantic verifier.
-   * Surfaces disagreements; never overrides the semantic verdict. See
-   * docs/triage-verifier-refactor.md.
-   */
-  calibrationMode?: boolean;
 }
 
 export async function evalCmd(opts: EvalOptions): Promise<number> {
@@ -108,7 +101,7 @@ export async function evalCmd(opts: EvalOptions): Promise<number> {
   }
 
   process.stdout.write(
-    `eval: ${selected.length} task(s) [${opts.withTriage ? 'with-triage' : 'baseline'}${opts.calibrationMode ? ' +calibration' : ''}], results -> ${resultsDir}\n`,
+    `eval: ${selected.length} task(s) [${opts.withTriage ? 'with-triage' : 'baseline'}], results -> ${resultsDir}\n`,
   );
 
   const results: EvalTaskResult[] = [];
@@ -124,7 +117,6 @@ export async function evalCmd(opts: EvalOptions): Promise<number> {
         artifactsDir: taskArtifactsDir,
         verbose: opts.verbose === true,
         ...(opts.withTriage ? { withTriage: true } : {}),
-        ...(opts.calibrationMode ? { calibrationMode: true } : {}),
         ...(anthropicClient ? { anthropicClient } : {}),
       });
       const dur = ((Date.now() - start) / 1000).toFixed(1);

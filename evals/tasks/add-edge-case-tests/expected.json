@@ -8,6 +8,5 @@
     "src/parse-int32.js is unchanged from the initial commit (no hunks touching that path)",
     "all tests pass"
   ],
-  "testCommands": ["npm test"],
-  "calibrationTestCommands": ["git diff --quiet main -- src/"]
+  "testCommands": ["npm test"]
 }
