@@ -139,26 +139,45 @@ describe('runVerifier: composition', () => {
     expect(r.usages).toHaveLength(2);
   });
 
-  it('exit-code fails → semantic NOT called → verdict.pass=false', async () => {
+  it('exit-code fails — semantic STILL CALLED (Option E signoff 3, diagnostic completeness) → verdict.pass=false', async () => {
     mkFailingScript(dir);
     const spec = makeSpec(['./fail.sh'], ['c1']);
     let semanticCallCount = 0;
-    const client: AnthropicClient = {
+    const client = {
       messages: {
         create: async () => {
           semanticCallCount++;
-          throw new Error('should not be called');
+          return {
+            id: 'msg',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-sonnet-4-6',
+            content: [{
+              type: 'tool_use',
+              id: 'toolu',
+              name: 'submit_verdict',
+              input: { criterion: 'c1', met: true, reasoning: 'r' },
+            }],
+            stop_reason: 'tool_use',
+            usage: { input_tokens: 500, output_tokens: 80, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          } as unknown;
         },
       },
     } as unknown as AnthropicClient;
     const r = await runVerifier(freshRun(), spec, {
       cwd: dir, client, diffRunner: stubDiffRunner,
     });
+    // Under signoff 3, both gates run on every call. Exit-code failure
+    // still propagates to verdict.pass=false, but semantic was called
+    // for diagnostic completeness.
     expect(r.verdict.pass).toBe(false);
-    expect(r.verdict.semanticCheck.matches).toBe(false);
-    expect(r.verdict.semanticCheck.perCriterion).toBeUndefined();
-    expect(semanticCallCount).toBe(0);
-    expect(r.usages).toHaveLength(0);
+    expect(semanticCallCount).toBe(1);
+    // Semantic itself matched (c1 met:true), so semanticCheck.matches stays true;
+    // verdict.pass is false purely because exit-code failed.
+    expect(r.verdict.semanticCheck.matches).toBe(true);
+    expect(r.usages).toHaveLength(1);
+    // The composed reasoning surfaces the exit-code failure explicitly.
+    expect(r.verdict.semanticCheck.reasoning).toMatch(/exit-code tests failed/);
   });
 
   it('exit-code passes + semantic matches:false → verdict.pass=false', async () => {
@@ -206,6 +225,110 @@ describe('runVerifier: missing client / no criteria', () => {
     });
     expect(r.verdict.pass).toBe(true);
     expect(r.verdict.semanticCheck.reasoning).toMatch(/no acceptance criteria/);
+  });
+});
+
+describe('runVerifier: fileStateChecks (Option E)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-loop-runverifier-'));
+  });
+  afterEach(() => {
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  });
+
+  const passingFileStateRunner = async (): Promise<RunCommandResult> => ({
+    exitCode: 0, stdout: '', stderr: '', durationMs: 1,
+    timedOut: false, spawnFailed: false,
+  });
+  const failingFileStateRunner = async (): Promise<RunCommandResult> => ({
+    exitCode: 1, stdout: '', stderr: 'fail', durationMs: 1,
+    timedOut: false, spawnFailed: false,
+  });
+
+  function makeSpecWithChecks(testCommands: string[], criteria: string[], checks: Array<{ type: 'unchanged' | 'deleted' | 'exists' | 'absent'; path: string }>): Spec {
+    return {
+      ...makeSpec(testCommands, criteria),
+      fileStateChecks: checks,
+    };
+  }
+
+  it('all 3 gates pass → verdict.pass=true; fileStateResult populated', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpecWithChecks(['./pass.sh'], ['c1'], [
+      { type: 'unchanged', path: 'src/foo.js' },
+    ]);
+    const client = clientWithJudgments([
+      { criterion: 'c1', met: true, reasoning: 'r' },
+    ]);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir, client, diffRunner: stubDiffRunner,
+      fileStateRunner: passingFileStateRunner,
+    });
+    expect(r.verdict.pass).toBe(true);
+    expect(r.fileStateResult).toBeDefined();
+    expect(r.fileStateResult?.pass).toBe(true);
+    expect(r.fileStateResult?.results).toHaveLength(1);
+  });
+
+  it('fileState fails + exit-code passes + semantic passes → verdict.pass=false; both other gates still run', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpecWithChecks(['./pass.sh'], ['c1'], [
+      { type: 'unchanged', path: 'src/foo.js' },
+    ]);
+    let semanticCallCount = 0;
+    const client = {
+      messages: {
+        create: async () => {
+          semanticCallCount++;
+          return {
+            id: 'm', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+            content: [{
+              type: 'tool_use', id: 't', name: 'submit_verdict',
+              input: { criterion: 'c1', met: true, reasoning: 'r' },
+            }],
+            stop_reason: 'tool_use',
+            usage: { input_tokens: 500, output_tokens: 80, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          } as unknown;
+        },
+      },
+    } as unknown as AnthropicClient;
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir, client, diffRunner: stubDiffRunner,
+      fileStateRunner: failingFileStateRunner,
+    });
+    expect(r.verdict.pass).toBe(false);
+    expect(r.fileStateResult?.pass).toBe(false);
+    expect(semanticCallCount).toBe(1); // signoff 3: semantic ran for diagnostic completeness
+    expect(r.verdict.semanticCheck.reasoning).toMatch(/file-state failures/);
+  });
+
+  it('empty fileStateChecks → fileStateResult.pass=true with empty results', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpec(['./pass.sh'], ['c1']); // no fileStateChecks field
+    const client = clientWithJudgments([
+      { criterion: 'c1', met: true, reasoning: 'r' },
+    ]);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir, client, diffRunner: stubDiffRunner,
+    });
+    expect(r.fileStateResult).toBeDefined();
+    expect(r.fileStateResult?.pass).toBe(true);
+    expect(r.fileStateResult?.results).toHaveLength(0);
+  });
+
+  it('no client + fileStateChecks present → fileState still runs; semantic skipped with reasoning', async () => {
+    mkPassingScript(dir);
+    const spec = makeSpecWithChecks(['./pass.sh'], ['c1'], [
+      { type: 'unchanged', path: 'src/foo.js' },
+    ]);
+    const r = await runVerifier(freshRun(), spec, {
+      cwd: dir,
+      fileStateRunner: passingFileStateRunner,
+    });
+    expect(r.verdict.pass).toBe(true);
+    expect(r.fileStateResult?.pass).toBe(true);
+    expect(r.verdict.semanticCheck.reasoning).toMatch(/no Anthropic client/);
   });
 });
 

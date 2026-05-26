@@ -39,6 +39,11 @@ import {
 import type { SemanticDebug } from './semanticSchema.js';
 import type { AnthropicClient } from '../agents/sdkClient.js';
 import { getDiffSinceBase, type DiffRunner } from '../git/diff.js';
+import {
+  runFileStateChecks,
+  type FileStateRunResult,
+  type FileStateRunner,
+} from './fileState.js';
 
 export { runExitCodeVerifier } from './exitCode.js';
 export {
@@ -65,6 +70,8 @@ export interface RunVerifierOptions extends VerifyOptions {
   baseRef?: string;
   /** Git diff runner override (testing seam). */
   diffRunner?: DiffRunner;
+  /** Override the file-state runner (testing seam). */
+  fileStateRunner?: FileStateRunner;
 }
 
 export interface RunVerifierResult {
@@ -82,6 +89,13 @@ export interface RunVerifierResult {
    * rejected it. Absent on clean happy-path runs.
    */
   semanticDebug?: SemanticDebug;
+  /**
+   * Result of the file-state checks (Option E). Populated whenever the
+   * spec has fileStateChecks — empty checks → empty results, pass:true.
+   * Surfaced separately from the Verdict so callers can inspect each
+   * check's exit code independently of the aggregated pass/fail.
+   */
+  fileStateResult?: FileStateRunResult;
 }
 
 export async function runVerifier(
@@ -90,114 +104,162 @@ export async function runVerifier(
   options: RunVerifierOptions,
 ): Promise<RunVerifierResult> {
   const logger: Logger | undefined = options.logger;
+
+  // Per Option E signoff 3: run exit-code, fileState, AND semantic
+  // unconditionally on every call (no short-circuit). The verdict's
+  // pass is true only when ALL THREE gates pass. Running all three
+  // gives complete diagnostic data — if fileState fails we still want
+  // to see the semantic verifier's per-criterion judgment about the
+  // diff, and vice versa.
+
+  // Gate 1: exit-code tests.
   const exitVerdict = await runExitCodeVerifier(run, spec, options);
 
-  if (!exitVerdict.pass) {
-    logger?.info(
-      'verifier: exit-code tests failed; skipping semantic verification',
-      { runId: run.id },
-    );
-    return {
-      verdict: skippedSemantic(
-        exitVerdict,
-        'exit-code tests failed; semantic verification skipped (fail-closed at exit-code gate)',
-      ),
-      usages: [],
-    };
-  }
-
-  if (!options.client) {
-    logger?.warn(
-      'verifier: no Anthropic client provided; running exit-code only',
-      { runId: run.id },
-    );
-    return {
-      verdict: skippedSemantic(
-        exitVerdict,
-        'semantic verifier disabled: no Anthropic client provided',
-      ),
-      usages: [],
-    };
-  }
-
-  if (spec.acceptanceCriteria.length === 0) {
-    logger?.info('verifier: spec has no acceptance criteria; semantic step trivially passes', {
-      runId: run.id,
-    });
-    return {
-      verdict: skippedSemantic(
-        exitVerdict,
-        'no acceptance criteria; semantic verifier had nothing to judge',
-      ),
-      usages: [],
-    };
-  }
-
-  const diff = await getDiffSinceBase({
-    cwd: options.cwd,
-    baseRef: options.baseRef ?? 'main',
-    ...(options.diffRunner !== undefined ? { runner: options.diffRunner } : {}),
-  });
-
-  const semantic = await runSemanticVerifier(
+  // Gate 2: fileStateChecks. Always invoked; degenerate (no checks)
+  // yields pass=true, results=[].
+  const fileStateResult = await runFileStateChecks(
+    spec.fileStateChecks ?? [],
     {
-      client: options.client,
-      ...(logger !== undefined ? { logger } : {}),
-      ...(options.semanticModel !== undefined
-        ? { model: options.semanticModel }
+      cwd: options.cwd,
+      ...(options.baseRef !== undefined ? { baseRef: options.baseRef } : {}),
+      ...(options.fileStateRunner !== undefined
+        ? { runner: options.fileStateRunner }
         : {}),
+      ...(logger !== undefined ? { logger } : {}),
     },
-    {
-      diff,
-      acceptanceCriteria: spec.acceptanceCriteria,
-    },
-    options.semanticOnSdkError !== undefined
-      ? { onSdkError: options.semanticOnSdkError }
-      : {},
   );
 
-  if (!semantic.ok) {
-    // Whole-task skip: every per-criterion call SDK-errored AND
-    // onSdkError is 'skip'. Accept the exit-code verdict alone.
-    logger?.warn(
-      'verifier: semantic step skipped due to SDK error; exit-code verdict stands',
-      { runId: run.id, message: semantic.message },
-    );
-    return {
-      verdict: skippedSemantic(
-        exitVerdict,
-        `semantic step skipped: ${semantic.message}`,
-      ),
-      usages: semantic.usages,
-    };
-  }
+  // Gate 3: semantic verifier. Conditional on having a client AND
+  // having acceptanceCriteria to judge. The conditions are about
+  // CAPABILITY, not about the run's outcome; both gates above ran
+  // either way.
+  const shouldRunSemantic =
+    options.client !== undefined && spec.acceptanceCriteria.length > 0;
 
-  // semantic.ok === true: we have per-criterion data (some judgments may
-  // be missing if individual calls failed). matches is false if any
-  // criterion is unmet OR any call errored.
-  const composed: Verdict = {
-    ...exitVerdict,
-    pass: exitVerdict.pass && semantic.matches,
-    semanticCheck: {
-      matches: semantic.matches,
-      reasoning: summarizeReasoning(
+  let usages: TokenUsage[] = [];
+  let semanticDebug: SemanticDebug | undefined;
+  let semanticReasoning: string;
+  let semanticMatches: boolean;
+  let perCriterion: ReturnType<typeof toPerCriterion> = [];
+
+  if (!shouldRunSemantic) {
+    semanticMatches = true; // trivially passes when nothing to judge
+    semanticReasoning =
+      options.client === undefined
+        ? 'semantic verifier disabled: no Anthropic client provided'
+        : 'no acceptance criteria; semantic verifier had nothing to judge';
+    if (options.client === undefined) {
+      logger?.warn('verifier: no Anthropic client provided; running exit-code + fileState only', {
+        runId: run.id,
+      });
+    }
+  } else {
+    const diff = await getDiffSinceBase({
+      cwd: options.cwd,
+      baseRef: options.baseRef ?? 'main',
+      ...(options.diffRunner !== undefined ? { runner: options.diffRunner } : {}),
+    });
+
+    const semantic = await runSemanticVerifier(
+      {
+        client: options.client!,
+        ...(logger !== undefined ? { logger } : {}),
+        ...(options.semanticModel !== undefined
+          ? { model: options.semanticModel }
+          : {}),
+      },
+      {
+        diff,
+        acceptanceCriteria: spec.acceptanceCriteria,
+      },
+      options.semanticOnSdkError !== undefined
+        ? { onSdkError: options.semanticOnSdkError }
+        : {},
+    );
+
+    usages = [...semantic.usages];
+
+    if (!semantic.ok) {
+      // Whole-task SDK-error skip (onSdkError === 'skip' AND every call
+      // SDK-errored). Treat semantic as not-blocking on this run.
+      logger?.warn(
+        'verifier: semantic step skipped due to SDK error',
+        { runId: run.id, message: semantic.message },
+      );
+      semanticMatches = true; // not contributing to pass=false
+      semanticReasoning = `semantic step skipped: ${semantic.message}`;
+    } else {
+      semanticMatches = semantic.matches;
+      semanticReasoning = summarizeReasoning(
         semantic.perCriterion,
         semantic.verifierErrors,
         semantic.diffTruncated,
-      ),
-      perCriterion: semantic.perCriterion.map((c) => ({
-        criterion: c.criterion,
-        met: c.met,
-        reasoning: c.reasoning,
-      })),
+      );
+      perCriterion = toPerCriterion(semantic.perCriterion);
+      if (semantic.debug !== undefined) semanticDebug = semantic.debug;
+    }
+  }
+
+  // Compose the final verdict. pass requires ALL THREE gates to pass.
+  const pass = exitVerdict.pass && fileStateResult.pass && semanticMatches;
+  const composedReasoning = composeReasoning(
+    exitVerdict.pass,
+    fileStateResult,
+    semanticReasoning,
+  );
+
+  const verdict: Verdict = {
+    ...exitVerdict,
+    pass,
+    semanticCheck: {
+      matches: semanticMatches,
+      reasoning: composedReasoning,
+      ...(perCriterion.length > 0 ? { perCriterion } : {}),
     },
   };
+
   const result: RunVerifierResult = {
-    verdict: composed,
-    usages: semantic.usages,
+    verdict,
+    usages,
+    fileStateResult,
   };
-  if (semantic.debug !== undefined) result.semanticDebug = semantic.debug;
+  if (semanticDebug !== undefined) result.semanticDebug = semanticDebug;
   return result;
+}
+
+function toPerCriterion(
+  judgments: ReadonlyArray<{ criterion: string; met: boolean; reasoning: string }>,
+): Array<{ criterion: string; met: boolean; reasoning: string }> {
+  return judgments.map((c) => ({
+    criterion: c.criterion,
+    met: c.met,
+    reasoning: c.reasoning,
+  }));
+}
+
+/**
+ * Build the verdict's reasoning string. The semantic reasoning is the
+ * base; file-state failures get appended; exit-code failures are
+ * implicit in the testResults.
+ */
+function composeReasoning(
+  exitCodePass: boolean,
+  fileState: FileStateRunResult,
+  semanticReasoning: string,
+): string {
+  const parts: string[] = [];
+  if (!exitCodePass) {
+    parts.push('exit-code tests failed');
+  }
+  if (!fileState.pass) {
+    const failed = fileState.results.filter((r) => !r.passed);
+    const detail = failed
+      .map((r) => `\`${r.command}\` (exit ${r.exitCode})`)
+      .join(', ');
+    parts.push(`file-state failures: ${detail}`);
+  }
+  parts.push(semanticReasoning);
+  return parts.join(' | ');
 }
 
 function skippedSemantic(exitVerdict: Verdict, reasoning: string): Verdict {
