@@ -34,7 +34,35 @@ export function validateSemanticOutput(
   if (!('perCriterion' in obj)) {
     return { errors: ['missing field: perCriterion'] };
   }
-  const list = obj['perCriterion'];
+  let list = obj['perCriterion'];
+
+  // Wire-format accommodation: Sonnet 4.6 was observed (CHECKPOINT 3
+  // re-runs, split-module task) producing perCriterion as a STRING
+  // containing a JSON-encoded array. Both calls of the retry loop
+  // produced the same shape even after an explicit "do not stringify
+  // the array" instruction in the retry prompt. The substantive
+  // judgments inside the stringified array were correct (criteria,
+  // met booleans, reasoning all well-formed); only the wire format
+  // was wrong. We accept stringified arrays by parsing them and
+  // re-validating as if the model had returned an array directly.
+  //
+  // This is ACCOMMODATION, not endorsement. The long-term answer is
+  // Option C from gap-triage-testcommand-pattern-debt — per-criterion
+  // verifier calls that avoid the array shape entirely. Tracked as
+  // BACKLOG#polish-validator-stringified-array-accommodation. If the
+  // accommodation produces calibration issues (e.g., enabling some
+  // failure mode we can't see yet), revisit and tighten.
+  if (typeof list === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(list);
+      if (Array.isArray(parsed)) {
+        list = parsed;
+      }
+    } catch {
+      // Fall through to the not-an-array rejection below.
+    }
+  }
+
   if (!Array.isArray(list)) {
     return { errors: ['perCriterion is not an array'] };
   }

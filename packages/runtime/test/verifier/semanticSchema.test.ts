@@ -65,6 +65,54 @@ describe('validateSemanticOutput: structural rejections', () => {
     expect('errors' in r).toBe(true);
   });
 
+  it('ACCEPTS perCriterion as a string containing a JSON-encoded array (wire-format accommodation)', () => {
+    // Sonnet 4.6 was observed (CHECKPOINT 3 re-runs, split-module task)
+    // producing perCriterion as a stringified JSON array. The substantive
+    // judgments are correct; only the wire format is wrong. Accommodation:
+    // we JSON.parse the string and re-validate. See
+    // BACKLOG#polish-validator-stringified-array-accommodation.
+    const inner = [
+      { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
+      { criterion: 'baz is qux', met: false, reasoning: 'ev2' },
+    ];
+    const r = validateSemanticOutput(
+      { perCriterion: JSON.stringify(inner) },
+      criteria,
+    );
+    expect('payload' in r).toBe(true);
+    if ('payload' in r) {
+      expect(r.payload.perCriterion).toHaveLength(2);
+      expect(r.payload.perCriterion[0]?.criterion).toBe('foo is bar');
+      expect(r.payload.perCriterion[1]?.met).toBe(false);
+    }
+  });
+
+  it('rejects perCriterion as a non-array string even after JSON.parse (parsed value is not an array)', () => {
+    // Edge case: model wraps in stringified object instead of array.
+    // The accommodation parses but rejects because the parsed value
+    // still isn't an array.
+    const r = validateSemanticOutput(
+      { perCriterion: JSON.stringify({ keyed: 'by criterion' }) },
+      criteria,
+    );
+    expect('errors' in r).toBe(true);
+    if ('errors' in r) {
+      expect(r.errors[0]).toMatch(/perCriterion is not an array/);
+    }
+  });
+
+  it('rejects perCriterion as a string that is not valid JSON', () => {
+    // JSON.parse throws; catch swallows; falls through to array check.
+    const r = validateSemanticOutput(
+      { perCriterion: 'not json at all' },
+      criteria,
+    );
+    expect('errors' in r).toBe(true);
+    if ('errors' in r) {
+      expect(r.errors[0]).toMatch(/perCriterion is not an array/);
+    }
+  });
+
   it('rejects empty perCriterion array', () => {
     const r = validateSemanticOutput({ perCriterion: [] }, criteria);
     expect('errors' in r).toBe(true);
