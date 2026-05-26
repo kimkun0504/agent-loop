@@ -228,3 +228,95 @@ describe('validateTriageOutput: rejection branch', () => {
     expect('errors' in r).toBe(true);
   });
 });
+
+describe('validateTriageOutput: fileStateChecks (Option E)', () => {
+  it('accepts all 4 valid types', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        fileStateChecks: [
+          { type: 'unchanged', path: 'src/foo.js' },
+          { type: 'deleted', path: 'src/old.js' },
+          { type: 'exists', path: 'src/new.js' },
+          { type: 'absent', path: 'src/never.js' },
+        ],
+      },
+    });
+    expect('errors' in r).toBe(false);
+    if (!('errors' in r) && r.kind === 'spec') {
+      expect(r.spec.fileStateChecks).toHaveLength(4);
+    }
+  });
+
+  it('accepts spec with no fileStateChecks field (backward compat)', () => {
+    const r = validateTriageOutput(validSpec);
+    expect('errors' in r).toBe(false);
+    if (!('errors' in r) && r.kind === 'spec') {
+      expect(r.spec.fileStateChecks).toBeUndefined();
+    }
+  });
+
+  it('accepts empty fileStateChecks array', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: { ...validSpec.spec, fileStateChecks: [] },
+    });
+    expect('errors' in r).toBe(false);
+  });
+
+  it('rejects unknown type', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        fileStateChecks: [{ type: 'modified', path: 'src/foo.js' }],
+      },
+    });
+    expect('errors' in r).toBe(true);
+    if ('errors' in r) {
+      expect(r.errors[0]).toMatch(/type: must be one of/);
+    }
+  });
+
+  it('rejects missing path', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        fileStateChecks: [{ type: 'unchanged' }],
+      },
+    });
+    expect('errors' in r).toBe(true);
+  });
+
+  it('rejects empty path', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        fileStateChecks: [{ type: 'unchanged', path: '' }],
+      },
+    });
+    expect('errors' in r).toBe(true);
+  });
+
+  it('rejects non-array fileStateChecks', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: { ...validSpec.spec, fileStateChecks: 'oops' },
+    });
+    expect('errors' in r).toBe(true);
+  });
+
+  it('rejects non-object entry', () => {
+    const r = validateTriageOutput({
+      ...validSpec,
+      spec: {
+        ...validSpec.spec,
+        fileStateChecks: ['unchanged: src/foo.js'],
+      },
+    });
+    expect('errors' in r).toBe(true);
+  });
+});

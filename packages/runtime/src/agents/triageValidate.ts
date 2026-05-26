@@ -16,12 +16,20 @@
  * the model can correct course.
  */
 
+import type { FileStateCheck } from '@agent-loop/core';
 import {
   VALID_TEST_COMMANDS,
   type TriageProducedSpec,
   type TriageRejectionReason,
   type ValidTestCommand,
 } from './triageSchema.js';
+
+const VALID_FILE_STATE_TYPES = new Set<FileStateCheck['type']>([
+  'unchanged',
+  'deleted',
+  'exists',
+  'absent',
+]);
 
 export type ValidatedTriage =
   | { kind: 'spec'; spec: TriageProducedSpec }
@@ -110,17 +118,53 @@ function validateSpecBranch(raw: Record<string, unknown>): ValidatedTriage | Val
     }
   }
 
+  // fileStateChecks: optional; when present, validate each entry.
+  let fileStateChecks: FileStateCheck[] | undefined;
+  if (spec['fileStateChecks'] !== undefined) {
+    const raw = spec['fileStateChecks'];
+    if (!Array.isArray(raw)) {
+      errors.push('spec.fileStateChecks must be an array when present');
+    } else {
+      const validated: FileStateCheck[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const entry = raw[i];
+        if (!isRecord(entry)) {
+          errors.push(`spec.fileStateChecks[${i}]: not an object`);
+          continue;
+        }
+        const t = entry['type'];
+        const p = entry['path'];
+        if (typeof t !== 'string' || !VALID_FILE_STATE_TYPES.has(t as FileStateCheck['type'])) {
+          errors.push(
+            `spec.fileStateChecks[${i}].type: must be one of ${[...VALID_FILE_STATE_TYPES].join(', ')}; got ${JSON.stringify(t)}`,
+          );
+          continue;
+        }
+        if (typeof p !== 'string' || p.length === 0) {
+          errors.push(`spec.fileStateChecks[${i}].path: missing or empty string`);
+          continue;
+        }
+        validated.push({ type: t as FileStateCheck['type'], path: p });
+      }
+      if (raw.length > 0 && errors.length === 0) {
+        fileStateChecks = validated;
+      } else if (raw.length === 0) {
+        // Empty array is permitted; semantically equivalent to absence.
+        fileStateChecks = [];
+      }
+    }
+  }
+
   if (errors.length > 0) return { errors };
-  return {
-    kind: 'spec',
-    spec: {
-      title: title!,
-      description: description!,
-      fileScope: fileScope!,
-      acceptanceCriteria: acceptance!,
-      testCommands: testCommands!,
-    },
+  const spec_out: TriageProducedSpec = {
+    title: title!,
+    description: description!,
+    fileScope: fileScope!,
+    acceptanceCriteria: acceptance!,
+    testCommands: testCommands!,
   };
+  if (fileStateChecks !== undefined) spec_out.fileStateChecks = fileStateChecks;
+  return { kind: 'spec', spec: spec_out };
 }
 
 function validateRejectionBranch(

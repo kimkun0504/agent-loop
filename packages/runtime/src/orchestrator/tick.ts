@@ -526,7 +526,7 @@ async function tickTriaging(deps: Deps, run: Run): Promise<Run> {
 
   if (result.ok) {
     const specId = SpecId(`spec-${run.id}`);
-    deps.store.insertSpec({
+    const specForDb: Spec = {
       id: specId,
       runId: run.id,
       title: result.spec.title,
@@ -537,7 +537,11 @@ async function tickTriaging(deps: Deps, run: Run): Promise<Run> {
       // Orchestrator owns the budget — we don't trust the model to size it.
       budget: DEFAULT_BUDGET,
       createdAt: deps.now(),
-    });
+    };
+    if (result.spec.fileStateChecks !== undefined) {
+      specForDb.fileStateChecks = result.spec.fileStateChecks;
+    }
+    deps.store.insertSpec(specForDb);
     return applyEvent(
       deps.store,
       run.id,

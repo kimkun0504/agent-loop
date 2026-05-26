@@ -15,7 +15,7 @@
  * the SDK's parser into a corner.
  */
 
-import type { TokenUsage } from '@agent-loop/core';
+import type { TokenUsage, FileStateCheck } from '@agent-loop/core';
 
 export const TRIAGE_TOOL_NAME = 'submit_triage_result';
 
@@ -101,7 +101,26 @@ export const TRIAGE_INPUT_SCHEMA = {
             ],
           },
           description:
-            'Test commands the verifier will run. PICK FROM THE ENUM ONLY — novel shell commands are schema-invalid. File-state assertions ("no parseDate remains", "src/foo.js unchanged") go in acceptanceCriteria as natural language; the semantic verifier judges those against the diff. Empty array is acceptable if the task is verifiable entirely by acceptanceCriteria (e.g., a docs-only change).',
+            'Test commands the verifier will run. PICK FROM THE ENUM ONLY — novel shell commands are schema-invalid. File-state assertions ("file X is unchanged", "file Y is deleted") go in fileStateChecks; behavior claims go in acceptanceCriteria. Empty array is acceptable if the task is verifiable entirely by acceptanceCriteria + fileStateChecks (e.g., a docs-only change).',
+        },
+        fileStateChecks: {
+          type: 'array',
+          minItems: 0,
+          maxItems: 10,
+          items: {
+            type: 'object',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['unchanged', 'deleted', 'exists', 'absent'],
+              },
+              path: { type: 'string', minLength: 1 },
+            },
+            required: ['type', 'path'],
+            additionalProperties: false,
+          },
+          description:
+            'Structured file-state assertions, mechanically verified by the verifier. Use this for ANY claim about a file\'s existence or non-modification. Types: "unchanged" (file is unchanged from initial commit), "deleted" (file no longer exists), "exists" (file is present), "absent" (file is not present). Path is relative to the repo root. PREFER fileStateChecks over acceptanceCriteria for file-state claims — these are deterministic, the semantic verifier cannot judge unchanged-file content from a diff. Content-preservation claims ("test for X is preserved") belong in acceptanceCriteria as diff-observable negative claims ("no hunk deletes the assertion ...").',
         },
       },
       required: ['title', 'description', 'fileScope', 'acceptanceCriteria', 'testCommands'],
@@ -143,6 +162,13 @@ export interface TriageProducedSpec {
   fileScope: string[];
   acceptanceCriteria: string[];
   testCommands: string[];
+  /**
+   * Structured file-state assertions (Option E). Optional; absence
+   * means triage didn't author any file-state claims for this task,
+   * not that the task has no file-state requirements. See
+   * docs/triage-file-reference-rethink.md.
+   */
+  fileStateChecks?: FileStateCheck[];
 }
 
 export type TriageRejectionReason =
