@@ -16,7 +16,7 @@ The system must do what it says it does.
 
 | Metric | Target | How measured |
 |---|---|---|
-| Eval pass rate | ≥ 80% of tasks in `evals/tasks/` produce a verdict.pass=true verdict on a clean run | `pnpm eval` runs each task; pass counted |
+| Eval pass rate (CHECKPOINT 3 gate) | Architectural-stability tasks (add-clamp, add-edge-case-tests, extract-helper, fix-off-by-one, rename-export, split-module): **5/5 valid runs at 100%**. Executor-capability tasks (infer-target-file): **≥3/5 valid runs at PASS** (stochastic by design). Documented rejections (vague-flaky-fix): continues to triage-reject per `gap-triage-thin-context`. Meta-test: **0 triage anti-pattern violations** across all valid runs. "Valid run" = executor was reachable; external infrastructure errors (Claude Code session-limit quota walls, network failures) excluded from the denominator. See `docs/per-criterion-verifier-refactor.md` for the refinement rationale. | `pnpm eval --with-triage`; per-task pass + `summary.json.triageAntiPatternViolations` |
 | State machine determinism | 100% — replaying the event log of any past run produces the same final Run state | Replay test in `packages/core/test/replay.test.ts` (to be built) |
 | Test suite passing | 100% on every commit to main | `pnpm -r test` in CI (CI to be built) |
 | Typecheck passing | 100% on every commit to main | `pnpm -r typecheck` in CI |
