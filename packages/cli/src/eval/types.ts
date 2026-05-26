@@ -2,11 +2,20 @@
  * Shared types for the eval harness.
  */
 
-import type { Phase, Failure } from '@agent-loop/core';
+import type { Phase, Failure, FileStateCheck } from '@agent-loop/core';
 
 export interface EvalExpected {
   acceptanceCriteria: string[];
   testCommands: string[];
+  /**
+   * Optional file-state checks per Option E
+   * (docs/triage-file-reference-rethink.md). When present, baseline-mode
+   * runs pass these through to the synthesized Spec; --with-triage mode
+   * uses triage's own fileStateChecks instead. The eval fixture's
+   * fileStateChecks document the "right answer" but don't constrain
+   * what triage produces.
+   */
+  fileStateChecks?: FileStateCheck[];
 }
 
 export interface EvalTask {

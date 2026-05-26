@@ -1,12 +1,15 @@
 {
   "acceptanceCriteria": [
-    "src/utils/parse.js exists and exports parseUrl",
-    "src/utils/format.js exists and exports formatUrl",
-    "src/utils.js has been deleted (the diff contains a deletion hunk for src/utils.js)",
+    "the diff adds src/utils/parse.js with an export of parseUrl",
+    "the diff adds src/utils/format.js with an export of formatUrl",
     "src/api.js imports parseUrl from src/utils/parse.js and formatUrl from src/utils/format.js",
     "test/utils.test.js imports parseUrl from the new location src/utils/parse.js",
-    "test/utils.test.js imports formatUrl from the new location src/utils/format.js",
-    "all tests pass"
+    "test/utils.test.js imports formatUrl from the new location src/utils/format.js"
   ],
-  "testCommands": ["npm test"]
+  "testCommands": ["npm test"],
+  "fileStateChecks": [
+    { "type": "exists", "path": "src/utils/parse.js" },
+    { "type": "exists", "path": "src/utils/format.js" },
+    { "type": "deleted", "path": "src/utils.js" }
+  ]
 }

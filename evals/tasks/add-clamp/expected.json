@@ -4,7 +4,7 @@
     "the diff contains a test that asserts clamp(5, 0, 10) returns 5 (a value in the range, unchanged) in a test file under test/",
     "the diff contains a test that asserts clamp(-3, 0, 10) returns 0 (a value below min, returned as min) in a test file under test/",
     "the diff contains a test that asserts clamp(99, 0, 10) returns 10 (a value above max, returned as max) in a test file under test/",
-    "existing multiply test still passes (no hunks remove or modify the multiply test)"
+    "if the diff modifies test/math.test.js, no hunks remove or modify lines containing the multiply assertion"
   ],
   "testCommands": ["npm test"]
 }

@@ -1,10 +1,11 @@
 {
   "acceptanceCriteria": [
     "isValidUrl is defined exactly once in src/ (no longer duplicated)",
-    "both validate.js and normalize.js use the shared helper",
-    "test/validate.test.js is unchanged from the initial commit",
-    "test/normalize.test.js is unchanged from the initial commit",
-    "npm test still passes"
+    "both validate.js and normalize.js use the shared helper"
   ],
-  "testCommands": ["npm test"]
+  "testCommands": ["npm test"],
+  "fileStateChecks": [
+    { "type": "unchanged", "path": "test/validate.test.js" },
+    { "type": "unchanged", "path": "test/normalize.test.js" }
+  ]
 }

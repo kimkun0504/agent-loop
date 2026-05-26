@@ -106,10 +106,40 @@ function validateExpected(raw: unknown): EvalExpected {
   if (!commands.every((s) => typeof s === 'string')) {
     throw new Error('testCommands must be strings');
   }
-  return {
+  const result: EvalExpected = {
     acceptanceCriteria: acceptance as string[],
     testCommands: commands as string[],
   };
+  const fileStateChecks = o['fileStateChecks'];
+  if (fileStateChecks !== undefined) {
+    if (!Array.isArray(fileStateChecks)) {
+      throw new Error('fileStateChecks must be an array when present');
+    }
+    const validTypes = new Set(['unchanged', 'deleted', 'exists', 'absent']);
+    for (let i = 0; i < fileStateChecks.length; i++) {
+      const c = fileStateChecks[i];
+      if (
+        c === null ||
+        typeof c !== 'object' ||
+        Array.isArray(c)
+      ) {
+        throw new Error(`fileStateChecks[${i}]: not an object`);
+      }
+      const obj = c as Record<string, unknown>;
+      if (typeof obj['type'] !== 'string' || !validTypes.has(obj['type'])) {
+        throw new Error(
+          `fileStateChecks[${i}].type: must be one of unchanged, deleted, exists, absent`,
+        );
+      }
+      if (typeof obj['path'] !== 'string' || obj['path'].length === 0) {
+        throw new Error(`fileStateChecks[${i}].path: missing or empty`);
+      }
+    }
+    result.fileStateChecks = fileStateChecks as NonNullable<
+      EvalExpected['fileStateChecks']
+    >;
+  }
+  return result;
 }
 
 function hasAnyFile(dir: string): boolean {

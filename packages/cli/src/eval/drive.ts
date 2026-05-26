@@ -174,7 +174,7 @@ export async function runOneTask(opts: RunOneOptions): Promise<EvalTaskResult> {
 }
 
 function buildEvalSpec(task: EvalTask, runId: RunId, now: string): Spec {
-  return {
+  const spec: Spec = {
     id: SpecId(`spec-${runId}`),
     runId,
     title: `eval: ${task.name}`,
@@ -186,6 +186,10 @@ function buildEvalSpec(task: EvalTask, runId: RunId, now: string): Spec {
     budget: DEFAULT_BUDGET,
     createdAt: now,
   };
+  if (task.expected.fileStateChecks !== undefined) {
+    spec.fileStateChecks = task.expected.fileStateChecks;
+  }
+  return spec;
 }
 
 function summarize(store: Store, name: string, runId: RunId): EvalTaskResult {
