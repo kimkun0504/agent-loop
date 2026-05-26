@@ -157,9 +157,36 @@ export interface Spec {
   acceptanceCriteria: string[];
   /** Test commands to run for verification. */
   testCommands: string[];
+  /**
+   * Structured file-state assertions, mechanically verified.
+   * Each check is one of 4 types applied to a single path. The verifier
+   * translates these to deterministic shell — see
+   * `docs/triage-file-reference-rethink.md` for the rationale.
+   * Optional for backward compatibility with pre-Option-E triage output.
+   */
+  fileStateChecks?: FileStateCheck[];
   /** Hard limits for this run. */
   budget: Budget;
   createdAt: string;
+}
+
+/**
+ * One assertion about a file's state at the post-edit checkpoint.
+ * The verifier translates each type to a deterministic shell command:
+ *   - unchanged → git diff --quiet main -- <path>
+ *   - deleted   → test ! -f <path>
+ *   - exists    → test -f <path>
+ *   - absent    → test ! -f <path>
+ *
+ * The 4-type enum is intentionally small. Content-preservation claims
+ * ("the test for X is preserved") belong in acceptanceCriteria as
+ * diff-observable negative claims ("no hunk deletes the assertion ..."),
+ * not as a fifth FileStateCheck type. See the rethink doc.
+ */
+export interface FileStateCheck {
+  type: 'unchanged' | 'deleted' | 'exists' | 'absent';
+  /** Path relative to the worktree root. Non-empty. */
+  path: string;
 }
 
 export interface Budget {
