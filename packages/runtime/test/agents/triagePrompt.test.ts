@@ -82,6 +82,56 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
       'judges criteria against the diff',
     );
   });
+
+  it('warns against runtime-claim acceptance criteria with explicit examples', () => {
+    // The CHECKPOINT 3 investigation found 3/3 verifier-flagged failures
+    // were "npm test passes" -shape criteria that triage spontaneously
+    // emits and the verifier cannot judge from a diff. This anti-pattern
+    // bullet lists those exact shapes by name.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Runtime claims');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('npm test passes');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('npm test still passes');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('tests pass');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('the build succeeds');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('no regressions are introduced');
+    // The anti-pattern bullet also tells the model the constructive path:
+    // restate test-related claims as observable-in-diff alternatives.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'the diff adds a test asserting X',
+    );
+  });
+
+  it('instructs the model to preserve specific behavioral verbs from task.md', () => {
+    // The CHECKPOINT 3 investigation also found triage was generalizing
+    // "throws RangeError" to "assertion for overflow", weakening the
+    // criterion. This instruction tells triage to keep the verb verbatim.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Verb preservation');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('throws RangeError');
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain(
+      'specificity is the contract',
+    );
+  });
+
+  it('the acceptanceCriteria arrays in the worked examples contain NO runtime-claim entries', () => {
+    // Earlier versions of Examples C and D included "npm test still passes"
+    // / "npm test passes" as acceptanceCriteria entries — the exact pattern
+    // the new anti-pattern section forbids. Check that no
+    // acceptanceCriteria array now contains those entries.
+    //
+    // The Anti-patterns prose legitimately QUOTES these strings as bad
+    // examples; we want to test the JSON arrays, not the surrounding text.
+    const arrayBlocks = [
+      ...TRIAGE_SYSTEM_PROMPT.matchAll(
+        /"acceptanceCriteria":\s*\[([^\]]+)\]/g,
+      ),
+    ].map((m) => m[1]!);
+    expect(arrayBlocks.length).toBeGreaterThanOrEqual(3); // examples A, C, D
+    for (const block of arrayBlocks) {
+      expect(block).not.toMatch(/"npm test (still )?passes"/);
+      expect(block).not.toMatch(/"tests pass"/);
+      expect(block).not.toMatch(/"all tests pass"/);
+    }
+  });
 });
 
 describe('buildTriageUserPrompt', () => {

@@ -61,6 +61,7 @@ When uncertain between spec and rejection, lean toward \`spec\`. The downstream 
   - "src/parse-int32.js is unchanged from the initial commit (no hunks touching that path)"
   - "test/handler.test.js imports the renamed export newName, not oldName"
   Phrasing matters: read the verb. "throws X on bad input" and "returns null on bad input" are different criteria.
+  Verb preservation: when the task description uses specific behavioral verbs ("throws RangeError", "returns null", "calls callback exactly once", "rejects with TypeError"), keep those verbs verbatim in the criterion. Do not generalize "throws RangeError" to "asserts overflow behavior" or "the function handles overflow"; the specificity is the contract. A weaker criterion lets a wrong fix slip past the verifier.
 - \`testCommands\`: a list picked from a fixed VOCABULARY of runnable project commands. The verifier executes each in the worktree; all must exit 0 for the run to pass.
 
 # testCommands VOCABULARY (the only commands you may use)
@@ -81,6 +82,7 @@ The testCommands array MAY be empty if the task is verifiable entirely through a
 These shapes are wrong and will not be judged correctly by the downstream verifier:
 
 - **Exit-code checks.** Do NOT write "command \`foo\` exits 0" or "\`grep -r X src/\` finds matches" as an acceptance criterion. The semantic verifier judges criteria against the diff, not by running shell commands. If you want a shell check, it has to be in testCommands (and therefore from the vocabulary above). If the vocabulary doesn't cover what you want, rephrase the claim as an observation about the diff ("the diff adds a test asserting X").
+- **Runtime claims.** Do NOT produce acceptance criteria that describe behavior the verifier cannot observe from a static diff. The verifier sees only the diff; testCommands gate runtime behavior separately and independently. **The most common shape of this mistake**: "npm test passes" / "npm test still passes" / "tests pass" / "all tests execute without errors" / "the build succeeds" / "no regressions are introduced" / "the function performs correctly under load". The verifier will (correctly) refuse to judge these from a diff and the run will fail even when the change is right. If a task's success genuinely requires a runtime check, put it in \`testCommands\` (which the verifier runs independently) — do NOT also restate it as an acceptanceCriterion. Static-from-diff alternatives if you want to express test coverage as a criterion: "the diff adds a test asserting X" / "test/foo.test.js contains an assertion that calls bar('input') and expects 42" / "the new test file imports the renamed function from its new location" — these ARE observable in a diff.
 - **Vague verbs.** Don't write "code is well-structured" or "improved performance". Concrete and observable, every time.
 - **Reference to pre-edit state without observability.** "Performance is 20% faster than before" is unobservable from a diff. Reframe as "the diff replaces the O(n²) loop in src/x.js with the O(n) sort-then-scan approach", which is observable.
 
@@ -151,15 +153,14 @@ Tool call:
     "acceptanceCriteria": [
       "the export in src/handler.js is renamed from oldName to newName",
       "test/handler.test.js imports newName from src/handler.js (not oldName)",
-      "no occurrence of the token oldName (as a whole word) remains anywhere under src/ or test/",
-      "npm test still passes"
+      "no occurrence of the token oldName (as a whole word) remains anywhere under src/ or test/"
     ],
     "testCommands": ["npm test"]
   }
 }
 \`\`\`
 
-Note: there is NO \`grep\` in testCommands. The "no occurrence of oldName" claim is an acceptanceCriterion — the semantic verifier reads the diff and judges whether oldName-shaped tokens remain. This pattern replaces what used to be a \`! grep -rE 'oldName\\\\b'\` shell command in earlier triage versions.
+Note: there is NO \`grep\` in testCommands. The "no occurrence of oldName" claim is an acceptanceCriterion — the semantic verifier reads the diff and judges whether oldName-shaped tokens remain. This pattern replaces what used to be a \`! grep -rE 'oldName\\\\b'\` shell command in earlier triage versions. Note also: \`testCommands: ["npm test"]\` independently gates that the tests still pass — there is NO runtime-claim criterion ("npm test passes") in \`acceptanceCriteria\`, because that's a runtime claim the verifier cannot judge from a diff (see the Anti-patterns section above).
 
 ## Example D — test-only change with a "don't modify src/" guard
 
@@ -180,15 +181,14 @@ Tool call:
       "test/email.test.js contains an assertion for the multiple-@ case",
       "test/email.test.js contains an assertion for a valid simple address",
       "test/email.test.js contains an assertion for a valid address with a subdomain",
-      "src/email.js is unchanged from the initial commit (no hunks touching that path)",
-      "npm test passes"
+      "src/email.js is unchanged from the initial commit (no hunks touching that path)"
     ],
     "testCommands": ["npm test"]
   }
 }
 \`\`\`
 
-Note: there is NO \`git diff --quiet main -- src/\` in testCommands. The "src/email.js is unchanged" claim is an acceptanceCriterion — the semantic verifier sees the full diff and judges whether any hunks touch src/email.js. This pattern replaces what used to be a \`git diff --quiet main -- src/\` shell guard.
+Note: there is NO \`git diff --quiet main -- src/\` in testCommands. The "src/email.js is unchanged" claim is an acceptanceCriterion — the semantic verifier sees the full diff and judges whether any hunks touch src/email.js. This pattern replaces what used to be a \`git diff --quiet main -- src/\` shell guard. Note also: \`testCommands: ["npm test"]\` independently runs the tests; there is NO "npm test passes" criterion in \`acceptanceCriteria\` because runtime test outcomes are not observable from a static diff (see the Anti-patterns section above).
 `;
 
 export function buildTriageUserPrompt(
