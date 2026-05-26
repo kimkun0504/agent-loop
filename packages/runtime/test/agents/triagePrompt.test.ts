@@ -33,24 +33,61 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
     expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('blank check');
   });
 
-  it('contains all four worked examples', () => {
+  it('contains all five worked examples', () => {
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example A');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example B');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example C');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Example D');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Example E');
     // B is the vague-task → rejection example.
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Improve the performance');
     expect(TRIAGE_SYSTEM_PROMPT).toContain('too_vague');
-    // C is the rename, now expressed via natural-language absence claim
-    // (the negated-grep shell command has been removed).
+    // C is the rename, expressed via natural-language absence claim.
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Rename oldName to newName');
     expect(TRIAGE_SYSTEM_PROMPT).toContain(
       'no occurrence of the token oldName',
     );
-    // D is the test-only change, now expressed via natural-language
-    // "unchanged" claim (the git-diff shell guard has been removed).
+    // D is the test-only change, now using fileStateChecks for the
+    // "unchanged" assertion (Option E).
     expect(TRIAGE_SYSTEM_PROMPT).toContain('Add edge-case tests for isValidEmail');
-    expect(TRIAGE_SYSTEM_PROMPT).toContain('src/email.js is unchanged');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"fileStateChecks"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"type": "unchanged"');
+    // E is the new content-preservation example using diff-observable
+    // negative claims.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Add clamp helper to src/math.js');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'no hunk in the diff deletes the multiply test',
+    );
+  });
+
+  it('describes fileStateChecks as a structured field with 4 enum types', () => {
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('fileStateChecks');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"unchanged"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"deleted"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"exists"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"absent"');
+    // Each type's shell translation is documented in the field guidance.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('git diff --quiet main');
+  });
+
+  it('warns against content claims about files outside the diff (Option E anti-pattern)', () => {
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'Content claims about files outside the diff',
+    );
+    // The specific failing-criterion shape from CHECKPOINT 3 rounds is
+    // called out by name.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'test/math.test.js still contains the multiply test',
+    );
+    // The constructive paths: use fileStateChecks for unchanged-status,
+    // or express stronger claims as diff-observable negative claims.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Use `fileStateChecks`');
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain(
+      'diff-observable negative claim',
+    );
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'no hunk in the diff deletes',
+    );
   });
 
   it('does not teach triage to author shell verification commands', () => {

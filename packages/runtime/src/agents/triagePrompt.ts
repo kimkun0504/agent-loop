@@ -63,6 +63,12 @@ When uncertain between spec and rejection, lean toward \`spec\`. The downstream 
   Phrasing matters: read the verb. "throws X on bad input" and "returns null on bad input" are different criteria.
   Verb preservation: when the task description uses specific behavioral verbs ("throws RangeError", "returns null", "calls callback exactly once", "rejects with TypeError"), keep those verbs verbatim in the criterion. Do not generalize "throws RangeError" to "asserts overflow behavior" or "the function handles overflow"; the specificity is the contract. A weaker criterion lets a wrong fix slip past the verifier.
 - \`testCommands\`: a list picked from a fixed VOCABULARY of runnable project commands. The verifier executes each in the worktree; all must exit 0 for the run to pass.
+- \`fileStateChecks\`: structured file-state assertions, mechanically verified. Each entry is \`{ type, path }\` where \`type\` is one of:
+  - \`"unchanged"\` — file is unchanged from the initial commit (verifier runs \`git diff --quiet main -- <path>\`)
+  - \`"deleted"\` — file no longer exists in the worktree (verifier runs \`test ! -f <path>\`)
+  - \`"exists"\` — file is present in the worktree (verifier runs \`test -f <path>\`)
+  - \`"absent"\` — file is not present in the worktree (verifier runs \`test ! -f <path>\`)
+  Use fileStateChecks for ANY claim about a file's existence or non-modification. The semantic verifier judges \`acceptanceCriteria\` from the diff and cannot see content of files the agent didn't touch. File-state assertions move to fileStateChecks so they're mechanically checked, not LLM-judged. Optional and may be empty.
 
 # testCommands VOCABULARY (the only commands you may use)
 
@@ -92,6 +98,7 @@ These shapes are wrong and will not be judged correctly by the downstream verifi
   - "test/foo.test.js contains a test for X" (observable)
   - "the existing test in test/bar.test.js remains unchanged from the initial commit" (observable; combines with the "diff is universe of changes" rule)
   - "src/baz.js exports parseQuux" (observable)
+- **Content claims about files outside the diff.** Do NOT write "test/math.test.js still contains the multiply test" or "src/foo.js still exports parseBar" as acceptanceCriteria when the file is NOT being modified by this change. The semantic verifier cannot see content of files with no hunks in the diff; it will judge such criteria not-met because the diff is the universe of changes. Use \`fileStateChecks\` with type \`"unchanged"\` instead — that's mechanically verified. If you want a STRONGER claim than "unchanged" — e.g., "the multiply test specifically is preserved" — express it as a diff-observable NEGATIVE claim: "no hunk in the diff deletes the assertion \`multiply(2,3)===6\`" or "the diff contains no deletion hunks affecting the multiply test block". These are observable because deletion hunks ARE in the diff.
 - **Vague verbs.** Don't write "code is well-structured" or "improved performance". Concrete and observable, every time.
 - **Reference to pre-edit state without observability.** "Performance is 20% faster than before" is unobservable from a diff. Reframe as "the diff replaces the O(n²) loop in src/x.js with the O(n) sort-then-scan approach", which is observable.
 
@@ -189,15 +196,48 @@ Tool call:
       "test/email.test.js contains an assertion for the missing-@ case",
       "test/email.test.js contains an assertion for the multiple-@ case",
       "test/email.test.js contains an assertion for a valid simple address",
-      "test/email.test.js contains an assertion for a valid address with a subdomain",
-      "src/email.js is unchanged from the initial commit (no hunks touching that path)"
+      "test/email.test.js contains an assertion for a valid address with a subdomain"
+    ],
+    "testCommands": ["npm test"],
+    "fileStateChecks": [
+      { "type": "unchanged", "path": "src/email.js" }
+    ]
+  }
+}
+\`\`\`
+
+Note: the "src/email.js is unchanged" claim now lives in \`fileStateChecks\`, where the verifier mechanically runs \`git diff --quiet main -- src/email.js\`. The earlier version of this example expressed the claim as a natural-language criterion in \`acceptanceCriteria\`; that worked but relied on the semantic verifier's "diff is universe of changes" judgment. \`fileStateChecks\` is the right channel because the claim is mechanical and the verifier produces a deterministic yes/no. Note also: \`testCommands: ["npm test"]\` independently runs the tests; there is NO "npm test passes" criterion in \`acceptanceCriteria\` because runtime test outcomes are not observable from a static diff (see the Anti-patterns section above).
+
+## Example E — preserving existing test content via diff-observable negative claim
+
+User input:
+> Task: Add a \`clamp(value, min, max)\` helper to \`src/math.js\`. The existing test file \`test/math.test.js\` already tests \`multiply\`. Add a new test file \`test/clamp.test.js\` (or extend the existing one — your choice). Make sure the existing multiply test still works.
+
+The trick here is that the task offers the agent a CHOICE of file location (extend existing or create new), AND asks for preservation of the existing multiply test. Don't assume the agent will modify \`test/math.test.js\`. Express "preserve the multiply test" as a diff-observable claim about deletion absence — the verifier CAN see deletion hunks.
+
+Tool call:
+\`\`\`
+{
+  "kind": "spec",
+  "spec": {
+    "title": "Add clamp helper to src/math.js",
+    "description": "Add a \`clamp(value, min, max)\` export to \`src/math.js\` that returns \`min\` when value < min, \`max\` when value > max, value otherwise. Add tests for the helper either in a new \`test/clamp.test.js\` or by appending to \`test/math.test.js\` — the agent's call. The existing multiply test must continue to work.",
+    "fileScope": ["src/math.js", "test/math.test.js", "test/clamp.test.js"],
+    "acceptanceCriteria": [
+      "src/math.js exports a clamp function",
+      "the diff adds a test that asserts clamp(-3, 0, 10) returns 0 (value below min)",
+      "the diff adds a test that asserts clamp(15, 0, 10) returns 10 (value above max)",
+      "the diff adds a test that asserts clamp(5, 0, 10) returns 5 (value in range)",
+      "no hunk in the diff deletes the multiply test from test/math.test.js (the existing test is preserved)"
     ],
     "testCommands": ["npm test"]
   }
 }
 \`\`\`
 
-Note: there is NO \`git diff --quiet main -- src/\` in testCommands. The "src/email.js is unchanged" claim is an acceptanceCriterion — the semantic verifier sees the full diff and judges whether any hunks touch src/email.js. This pattern replaces what used to be a \`git diff --quiet main -- src/\` shell guard. Note also: \`testCommands: ["npm test"]\` independently runs the tests; there is NO "npm test passes" criterion in \`acceptanceCriteria\` because runtime test outcomes are not observable from a static diff (see the Anti-patterns section above).
+Note: criterion #5 is the preservation claim, expressed as a NEGATIVE diff observation ("no hunk deletes ..."). Deletion hunks ARE visible in a diff, so this is observable. The verifier can judge it: it scans the diff for deletion hunks affecting the multiply test block; if none, the claim is met. There is NO criterion of the form "test/math.test.js still contains the multiply test" — that would be a content claim about a file we don't know is in the diff, which the verifier can't judge. There is also NO criterion of the form "the multiply test still passes" — that's a runtime claim.
+
+The fileScope includes BOTH possible test paths (math.test.js, clamp.test.js) because the agent picks. fileStateChecks is omitted because the contract is on diff observations, not file state.
 `;
 
 export function buildTriageUserPrompt(
