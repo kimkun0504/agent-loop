@@ -221,7 +221,9 @@ function makeTriageJson(
 }
 
 describe('instrument: triage anti-pattern meta-test', () => {
-  // The regex: /\b(and|also|plus|while|moreover)\s+.{0,60}\b(pass(es)?|build succeeds|works correctly|run correctly|no regressions)/i
+  // Detects compound runtime-claim shapes (conjunction + runtime-claim
+  // assertion within 60 chars). Tightened after CHECKPOINT 3 round 2's
+  // false positive on "Nested objects and arrays pass through ...".
 
   it('detects "X exists and it still passes" compound', () => {
     makeTriageJson('t1', 'eval-t1', [
@@ -284,10 +286,60 @@ describe('instrument: triage anti-pattern meta-test', () => {
   it('does NOT flag a runtime keyword without a preceding conjunction', () => {
     makeTriageJson('t1', 'eval-t1', [
       // The regex requires a conjunction BEFORE the runtime keyword.
-      'parseInt32 passes through valid inputs unchanged',
+      'parseInt32 returns the parsed integer for valid inputs',
     ]);
     const r = instrument(root, [mkResult({ name: 't1' })]);
     expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('does NOT flag the "pass through" idiom (the CHECKPOINT 3 round-2 false positive)', () => {
+    // This is the exact criterion that flipped the meta-test false-positive
+    // in the post-Part-A 5-run gate validation. "arrays pass through" is
+    // data-flow semantics, not test-execution semantics. The tightened
+    // regex requires "pass(es)" to appear in a runtime context (subject
+    // noun, "still"/"continues", clause boundary, or explicit phrase).
+    makeTriageJson('t1', 'eval-t1', [
+      'Nested objects and arrays pass through with their string children trimmed',
+    ]);
+    const r = instrument(root, [mkResult({ name: 't1' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('does NOT flag "pass through" / "passing through" / "passes through" idioms', () => {
+    makeTriageJson('idioms', 'eval-idioms', [
+      'data flows pass through the validator unchanged',
+      'arguments and options pass through to the inner function',
+      'the diff updates the function to pass through additional metadata',
+      'when the wrapper passes through, the inner handler runs',
+    ]);
+    const r = instrument(root, [mkResult({ name: 'idioms' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('does NOT flag "passes X to Y" / "pass into" transitive uses', () => {
+    makeTriageJson('transitive', 'eval-transitive', [
+      'the function takes a callback and passes the result to the caller',
+      'src/api.js parses the request and passes options into the handler',
+      'the test fixture sends data and passes a config to the wrapper',
+    ]);
+    const r = instrument(root, [mkResult({ name: 'transitive' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('does NOT flag "passing" gerund (which the old regex ignored anyway, kept for completeness)', () => {
+    makeTriageJson('gerund', 'eval-gerund', [
+      'the diff adds error handling for the case where args are passing through unmodified',
+    ]);
+    const r = instrument(root, [mkResult({ name: 'gerund' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(0);
+  });
+
+  it('detects clause-boundary runtime claim ("..., and Y passes.")', () => {
+    makeTriageJson('clause', 'eval-clause', [
+      'X is exported correctly, and Y passes.',
+    ]);
+    const r = instrument(root, [mkResult({ name: 'clause' })]);
+    expect(r.triageAntiPatternViolations).toHaveLength(1);
   });
 
   it('records the actual CHECKPOINT 3 round-2 failing criterion', () => {

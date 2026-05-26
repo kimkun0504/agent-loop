@@ -49,24 +49,64 @@ const CONTEXT_SEEKING_PHRASES = [
 /**
  * Detects the compound runtime-claim anti-pattern in triage's
  * acceptanceCriteria output. Matches a conjunction word followed by
- * up to 60 characters followed by a runtime-claim keyword.
+ * up to 60 characters followed by a runtime-claim assertion.
+ *
+ * The earlier (initial) version of this regex matched bare "pass" /
+ * "passes" anywhere in the tail. That over-matched idiomatic uses:
+ * "Nested objects and arrays pass through ..." flagged a false
+ * positive because "and arrays" matched the conjunction and "pass"
+ * the runtime keyword, even though "pass through" is data-flow
+ * semantics, not test-execution. See the CHECKPOINT 3 round-2 round
+ * for the original data point.
+ *
+ * Tightened: "pass(es)" must appear in one of four runtime contexts:
+ *   1. After a runtime SUBJECT noun (tests/build/spec/suite/verification/
+ *      assertion). "the new tests pass" → matches.
+ *   2. After "still" / "continue(s) to". "it still passes" → matches.
+ *   3. At a clause boundary (followed by punctuation or end of string).
+ *      "X is correct, and Y passes." → matches.
+ *   4. Explicit phrases: "build succeeds", "no regressions", "works
+ *      correctly", "runs correctly".
  *
  * Examples that match:
  *   - "X exists and it still passes"
  *   - "Y remains unchanged and continues to pass"
  *   - "Z is correct, plus the new tests pass"
+ *   - "code is right and the build succeeds"
  *
  * Examples that do NOT match:
- *   - "X exists and Y exists" (no runtime keyword)
+ *   - "Nested objects and arrays pass through ..." (idiom: pass through)
+ *   - "X passes value to Y" (transitive verb, not test execution)
+ *   - "code is right and Y exists" (no runtime keyword)
  *   - "passes the test for X" (no preceding conjunction)
- *
- * Tunable. Specified in the gate fix (Part B of the second-round
- * triage anti-pattern work). The triage system prompt's anti-pattern
- * section calls out the same pattern; this meta-test fires on
- * triage output, so the two reinforce each other.
  */
-export const COMPOUND_RUNTIME_CLAIM_REGEX =
-  /\b(and|also|plus|while|moreover)\s+.{0,60}\b(pass(es)?|build succeeds|works correctly|run correctly|no regressions)/i;
+export const COMPOUND_RUNTIME_CLAIM_REGEX = new RegExp(
+  // Conjunction word
+  '\\b(?:and|also|plus|while|moreover)\\s+' +
+    // Up to 60 chars between conjunction and the runtime claim
+    '.{0,60}' +
+    // Runtime claim — one of four shapes:
+    '(?:' +
+    // (1) runtime subject + (optional "still"/"continues to") + verb
+    '\\b(?:tests?|build|spec|suite|verification|assertion[s]?)\\s+(?:still\\s+|continues?\\s+to\\s+)?(?:pass(?:es)?|succeed[s]?)\\b' +
+    '|' +
+    // (2) "still passes" / "continues to pass" — implicit runtime subject
+    '\\b(?:still|continues?\\s+to|continue\\s+to)\\s+pass(?:es)?\\b' +
+    '|' +
+    // (3) standalone "passes" / "pass" at clause boundary
+    '\\bpass(?:es)?(?=\\s*(?:[,.;!?]|$))' +
+    '|' +
+    // (4) explicit runtime phrases
+    '\\bbuild\\s+succeeds?\\b' +
+    '|' +
+    '\\bno\\s+regressions?\\b' +
+    '|' +
+    '\\bworks?\\s+correctly\\b' +
+    '|' +
+    '\\bruns?\\s+correctly\\b' +
+    ')',
+  'i',
+);
 
 export interface PlannerSignals {
   /** Tasks where a planner.json artifact was found. */
