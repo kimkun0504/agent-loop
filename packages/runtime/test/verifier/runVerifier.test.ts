@@ -59,15 +59,26 @@ function mkFailingScript(dir: string): string {
   return path;
 }
 
+/**
+ * Per-criterion architecture: each criterion gets ONE call. Returns
+ * one judgment per call in array order. If there are fewer judgments
+ * than calls, later calls throw (signals the test set up the wrong
+ * number).
+ */
 function clientWithJudgments(perCriterion: Array<{
   criterion: string;
   met: boolean;
   reasoning: string;
 }>): AnthropicClient {
+  let i = 0;
   return {
     messages: {
-      create: async () =>
-        ({
+      create: async () => {
+        const judgment = perCriterion[i++];
+        if (!judgment) {
+          throw new Error(`clientWithJudgments: no judgment for call ${i}`);
+        }
+        return {
           id: 'msg',
           type: 'message',
           role: 'assistant',
@@ -77,17 +88,18 @@ function clientWithJudgments(perCriterion: Array<{
               type: 'tool_use',
               id: 'toolu',
               name: 'submit_verdict',
-              input: { perCriterion },
+              input: judgment,
             },
           ],
           stop_reason: 'tool_use',
           usage: {
             input_tokens: 500,
-            output_tokens: 100,
+            output_tokens: 80,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
           },
-        }) as unknown,
+        } as unknown;
+      },
     },
   } as unknown as AnthropicClient;
 }
@@ -123,7 +135,8 @@ describe('runVerifier: composition', () => {
     expect(r.verdict.pass).toBe(true);
     expect(r.verdict.semanticCheck.matches).toBe(true);
     expect(r.verdict.semanticCheck.perCriterion).toHaveLength(2);
-    expect(r.usages).toHaveLength(1);
+    // Per-criterion architecture: one usage per criterion (2 calls, 2 usages).
+    expect(r.usages).toHaveLength(2);
   });
 
   it('exit-code fails → semantic NOT called → verdict.pass=false', async () => {
@@ -205,7 +218,7 @@ describe('runVerifier: SDK error policy', () => {
     try { rmSync(dir, { recursive: true, force: true }); } catch {}
   });
 
-  it('default strict: SDK error → verdict.pass=false', async () => {
+  it('default strict: per-criterion SDK error → verdict.pass=false with verifier error in reasoning', async () => {
     mkPassingScript(dir);
     const spec = makeSpec(['./pass.sh'], ['c1']);
     const client: AnthropicClient = {
@@ -215,8 +228,10 @@ describe('runVerifier: SDK error policy', () => {
       cwd: dir, client, diffRunner: stubDiffRunner,
     });
     expect(r.verdict.pass).toBe(false);
-    expect(r.verdict.semanticCheck.reasoning).toMatch(/semantic verifier failed/);
-    expect(r.verdict.semanticCheck.reasoning).toMatch(/rate_limit/);
+    // Per-criterion architecture: SDK error on the single criterion becomes
+    // a verifierError. Reasoning string carries the criterion + reason.
+    expect(r.verdict.semanticCheck.reasoning).toMatch(/verifier error/);
+    expect(r.verdict.semanticCheck.reasoning).toMatch(/sdk_error/);
   });
 
   it('semanticOnSdkError=skip: SDK error → exit-code verdict stands', async () => {

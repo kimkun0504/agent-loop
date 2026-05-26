@@ -1,11 +1,17 @@
 /**
- * Schema definitions for the semantic verifier's forced tool call.
+ * Schema definitions for the semantic verifier's per-criterion tool call.
  *
- * The semantic verifier is given a diff + a list of acceptance criteria
- * and must judge each criterion independently. We DO NOT ask the model
- * for an overall verdict — `matches` is derived as `every(c => c.met)`.
- * The discipline is that the model judges each claim in isolation; we
- * aggregate. Less rubber-stamping.
+ * Each verifier call judges ONE criterion against the diff. The tool input
+ * is a single judgment object — `criterion`, `met`, `reasoning`. There is
+ * no array shape on the wire; this is the architectural fix from
+ * docs/per-criterion-verifier-refactor.md. The schema's *absence* of a
+ * `perCriterion` field is a contract; if a future refactor reintroduces
+ * the array shape, semanticSchema.test.ts regression test #13 catches it.
+ *
+ * The aggregator in runSemanticVerifier collects N single-judgment
+ * responses into the `Verdict.semanticCheck.perCriterion` array that
+ * downstream consumers expect. Aggregation lives in TS code, not in
+ * the wire format.
  */
 
 export const SEMANTIC_TOOL_NAME = 'submit_verdict';
@@ -16,59 +22,56 @@ export interface PerCriterionJudgment {
   readonly reasoning: string;
 }
 
-export interface SemanticVerdictPayload {
-  readonly perCriterion: ReadonlyArray<PerCriterionJudgment>;
+/** The shape of a single tool call's input. One judgment per call. */
+export const SEMANTIC_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    criterion: { type: 'string', minLength: 1 },
+    met: { type: 'boolean' },
+    reasoning: { type: 'string', minLength: 1, maxLength: 500 },
+  },
+  required: ['criterion', 'met', 'reasoning'],
+  additionalProperties: false,
+};
+
+/**
+ * A per-criterion verifier failure (SDK error, invalid output twice, or
+ * skipped via onSdkError option). Surfaced in SemanticVerifierResult.
+ * The aggregator preserves these so the verdict's reasoning string can
+ * cite specific failing criteria.
+ */
+export interface VerifierError {
+  readonly criterion: string;
+  readonly reason: 'sdk_error' | 'invalid_output' | 'skipped';
+  readonly message: string;
 }
 
 /**
- * Debug artifact written when the semantic verifier hits at least one
- * validation failure (call 1 invalid → retry, regardless of retry outcome).
+ * Debug artifact written when ANY per-criterion call fails validation.
+ * Captures ALL calls (successful + failed) because the diagnostic value
+ * is cross-call comparison within a task — same diff, same system prompt,
+ * different criterion outcomes. See refinement A in
+ * docs/per-criterion-verifier-refactor.md.
  *
- * Captures the raw model output before validation so a human reviewing the
- * artifact can see exactly what shape the model produced and why the
- * validator rejected it. Without this, "perCriterion is not an array"
- * is opaque — we'd have to guess between "object keyed by criterion",
- * "wrapped array", "stringified JSON", or "truncated response".
- *
- * Successful runs (call 1 valid, no retry) do NOT produce this artifact;
- * the parsed perCriterion already lives on verdict-NNN.json.
- *
- * SDK errors (no tool_use response at all) do NOT produce this artifact;
- * there's no model output to capture.
+ * No artifact written when all calls succeed; their judgments are
+ * already in verdict-NNN.json.
  */
 export interface SemanticDebugCall {
-  /** The user prompt sent on this call. Call 1 is the original; call 2 is the retry with validator-error feedback inlined. */
+  /** 0-based index into the task's acceptanceCriteria. */
+  readonly criterionIndex: number;
+  /** The criterion text this call was judging. */
+  readonly criterion: string;
+  /** The user prompt sent on this call (initial or retry). */
   readonly userPrompt: string;
-  /** The literal `input` from the model's tool_use block. Whatever it produced, before our validator parsed it. */
+  /** The literal `input` from the model's tool_use block. */
   readonly rawToolInput: unknown;
-  /** Validator complaints. Present iff this call failed validation. Absent for the call that ultimately produced a valid result. */
-  readonly validatorErrors?: ReadonlyArray<string>;
+  /** Outcome of validation for this call. ok:true means accepted; ok:false captures the reason + validator errors. */
+  readonly validatorOutcome:
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: 'sdk_error' | 'invalid_output'; readonly errors: ReadonlyArray<string> };
 }
 
 export interface SemanticDebug {
   readonly systemPrompt: string;
   readonly calls: ReadonlyArray<SemanticDebugCall>;
-  readonly finalOutcome: 'ok' | 'invalid_output';
 }
-
-export const SEMANTIC_INPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    perCriterion: {
-      type: 'array',
-      minItems: 1,
-      items: {
-        type: 'object',
-        properties: {
-          criterion: { type: 'string', minLength: 1 },
-          met: { type: 'boolean' },
-          reasoning: { type: 'string', minLength: 1, maxLength: 500 },
-        },
-        required: ['criterion', 'met', 'reasoning'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['perCriterion'],
-  additionalProperties: false,
-};

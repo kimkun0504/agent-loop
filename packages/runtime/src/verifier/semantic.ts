@@ -1,32 +1,30 @@
 /**
- * runSemanticVerifier — internal step inside the verifier package.
+ * runSemanticVerifier — per-criterion implementation.
  *
- * Given a diff + a list of acceptance criteria, calls Sonnet via forced
- * tool_use and returns a per-criterion judgment. Same shape as runTriage /
- * runPlanner but a different dependency story:
+ * The semantic verifier makes ONE Sonnet call per acceptance criterion
+ * and aggregates the per-call judgments into a single result. The wire
+ * format is one judgment object per call; there is no array shape on
+ * the surface, which structurally eliminates the stringified-array
+ * failure mode observed at CHECKPOINT 3.
  *
- *   1. Path A for token usage: this function does NOT apply
- *      record_token_usage events. It returns `usages: TokenUsage[]` and
- *      the caller (tickVerifying, via runVerifier) applies them. The
- *      verifier stays a function of inputs + deps — no orchestrator
- *      coupling. The downside is that retry-storm budget is checked AFTER
- *      both calls land, but max retry count is 1 (so ≤2 calls per run,
- *      cost capped at ~$0.04) and the bound is tolerable.
+ * Hybrid execution: call 1 is serial (it establishes the Anthropic
+ * prompt cache by writing a breakpoint after the system prompt + diff
+ * portion of the user prompt). Calls 2..N run in parallel using
+ * Promise.all; each reads the cache that call 1 wrote. Wall-clock per
+ * task verifier phase: ~call_1_duration + max(parallel call durations)
+ * ≈ ~10s, comparable to the single-call architecture's ~9s. Cost: see
+ * docs/per-criterion-verifier-refactor.md §"Cost projection".
  *
- *   2. SDK error policy is "strict by default": on a thrown SDK error,
- *      the function returns ok:false reason:'sdk_error'. The composer
- *      (runVerifier) decides how to fold that into the overall Verdict
- *      based on VerifyOptions.semanticOnSdkError. Default 'strict' →
- *      semanticCheck.matches: false. Opt-in 'skip' → semantic step is
- *      treated as not-run and the exit-code verdict stands alone.
+ * Per-criterion failure isolation: a failed call (SDK error or invalid
+ * output twice) does NOT abort the task. Other criteria continue. The
+ * aggregator preserves the failure detail in `verifierErrors`; the
+ * overall `matches` is false if any criterion is unmet OR any call
+ * errored. Verdict.pass is `exitCodePass AND matches`.
  *
- *   3. The diff is capped at 30 KB. If the input diff is larger, we
- *      truncate to 30 KB and append a marker. The model is told it's
- *      truncated and may mark `met: false` for criteria it cannot
- *      evaluate. Better to defer than to guess.
- *
- *   4. Two consecutive invalid outputs → synthesized "invalid output
- *      twice" failure, same conservative pattern as triage/planner.
+ * Whole-task SDK-error skip: if onSdkError === 'skip' AND every call
+ * SDK-errored, the result is `ok: false reason: 'skipped'` and the
+ * composer (runVerifier) treats the exit-code verdict as authoritative.
+ * Otherwise, per-call SDK errors become per-criterion verifierErrors.
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
@@ -37,6 +35,7 @@ import {
   SEMANTIC_INPUT_SCHEMA,
   SEMANTIC_TOOL_NAME,
   type PerCriterionJudgment,
+  type VerifierError,
   type SemanticDebug,
   type SemanticDebugCall,
 } from './semanticSchema.js';
@@ -45,10 +44,10 @@ import {
   buildSemanticRetryUserPrompt,
   buildSemanticUserPrompt,
 } from './semanticPrompt.js';
-import { validateSemanticOutput } from './semanticValidate.js';
+import { validateSingleJudgment } from './semanticValidate.js';
 
 export const DEFAULT_SEMANTIC_MODEL = 'claude-sonnet-4-6';
-const MAX_OUTPUT_TOKENS = 4_000;
+const MAX_OUTPUT_TOKENS = 1_000;
 const DIFF_CAP_BYTES = 30_000;
 const TRUNCATION_MARKER = '\n... [truncated] ...';
 
@@ -66,13 +65,6 @@ export interface SemanticVerifierInput {
 }
 
 export interface SemanticVerifierOptions {
-  /**
-   * What to do when the SDK throws (network, rate limit, auth).
-   * 'strict' (default): return ok:false reason:'sdk_error'. The composer
-   *   marks the overall verdict as failed.
-   * 'skip': return ok:false reason:'skipped'. The composer treats the
-   *   semantic step as not-run; the exit-code verdict stands alone.
-   */
   onSdkError?: SemanticOnSdkError;
 }
 
@@ -81,27 +73,16 @@ export type SemanticVerifierResult =
       ok: true;
       matches: boolean;
       perCriterion: ReadonlyArray<PerCriterionJudgment>;
+      verifierErrors: ReadonlyArray<VerifierError>;
       usages: TokenUsage[];
       diffTruncated: boolean;
-      /**
-       * Present iff call 1 failed validation and call 2 succeeded.
-       * Captures the raw output so we can see what shape call 1 produced
-       * and confirm the retry-feedback fix worked. Absent on clean
-       * happy-path (call 1 succeeded).
-       */
       debug?: SemanticDebug;
     }
   | {
       ok: false;
-      reason: 'sdk_error' | 'invalid_output' | 'skipped';
+      reason: 'skipped';
       message: string;
       usages: TokenUsage[];
-      /**
-       * Present iff reason === 'invalid_output' (both calls failed
-       * validation). Absent on sdk_error and skipped — those have no
-       * model output to capture.
-       */
-      debug?: SemanticDebug;
     };
 
 export async function runSemanticVerifier(
@@ -111,137 +92,281 @@ export async function runSemanticVerifier(
 ): Promise<SemanticVerifierResult> {
   const model = deps.model ?? DEFAULT_SEMANTIC_MODEL;
   const onSdkError: SemanticOnSdkError = options.onSdkError ?? 'strict';
-
-  const { diff: capped, truncated } = capDiff(input.diff);
-  const userPrompt = buildSemanticUserPrompt(capped, input.acceptanceCriteria);
+  const { diff: cappedDiff, truncated } = capDiff(input.diff);
 
   deps.logger?.info('semantic-verifier: starting', {
     model,
     criteriaCount: input.acceptanceCriteria.length,
-    diffBytes: capped.length,
+    diffBytes: cappedDiff.length,
     truncated,
   });
 
+  if (input.acceptanceCriteria.length === 0) {
+    // No criteria → no calls → trivially matches. The composer guards
+    // against this case before calling us, but defensive return here.
+    return {
+      ok: true,
+      matches: true,
+      perCriterion: [],
+      verifierErrors: [],
+      usages: [],
+      diffTruncated: truncated,
+    };
+  }
+
+  // Call 1: serial. Establishes the prompt cache for calls 2..N.
+  // The first call also pays the cache-write surcharge on the cached
+  // prefix (~1.25× input cost on those tokens). Subsequent calls read
+  // the cache at 0.1× input cost.
+  const call1 = await callOne(
+    deps,
+    model,
+    cappedDiff,
+    input.acceptanceCriteria[0]!,
+    0,
+  );
+
+  // Calls 2..N: parallel. Each reads the cache built by call 1.
+  // Promise.all dispatches them concurrently; per-call retries (on
+  // invalid output) happen independently and do NOT block each other.
+  const restCalls = await Promise.all(
+    input.acceptanceCriteria.slice(1).map((criterion, i) =>
+      callOne(deps, model, cappedDiff, criterion, i + 1),
+    ),
+  );
+
+  const allCalls = [call1, ...restCalls];
+
+  // Aggregate.
+  const perCriterion: PerCriterionJudgment[] = [];
+  const verifierErrors: VerifierError[] = [];
   const usages: TokenUsage[] = [];
   const debugCalls: SemanticDebugCall[] = [];
 
-  const call1 = await callSemanticOnce(deps, model, userPrompt);
-  if ('error' in call1) {
-    deps.logger?.error('semantic-verifier: SDK error on call 1', {
-      err: call1.error,
-    });
-    return sdkErrorResult(call1.error, onSdkError, usages, deps.logger);
-  }
-  usages.push(call1.usage);
-
-  const validated1 = validateSemanticOutput(
-    call1.toolInput,
-    input.acceptanceCriteria,
-  );
-  if ('payload' in validated1) {
-    // Happy path: call 1 valid, no retry, no debug artifact.
-    return shapeOk(validated1.payload.perCriterion, usages, truncated);
-  }
-
-  // Call 1 failed validation. Capture the raw output for the debug artifact;
-  // we'll surface it whether or not call 2 succeeds.
-  debugCalls.push({
-    userPrompt,
-    rawToolInput: call1.toolInput,
-    validatorErrors: [...validated1.errors],
-  });
-
-  deps.logger?.warn('semantic-verifier: call 1 invalid; retrying with feedback', {
-    errors: validated1.errors,
-  });
-  const retryPrompt = buildSemanticRetryUserPrompt(
-    userPrompt,
-    validated1.errors,
-    input.acceptanceCriteria.length,
-  );
-  const call2 = await callSemanticOnce(deps, model, retryPrompt);
-  if ('error' in call2) {
-    deps.logger?.error('semantic-verifier: SDK error on call 2', {
-      err: call2.error,
-    });
-    // SDK error on call 2 — we have debug data from call 1 but no call 2
-    // output to capture. The sdk_error path doesn't carry debug (per the
-    // type), but the call 1 raw output is still in the logger context
-    // for now. (Persisting debug across SDK errors is a future polish if
-    // we find ourselves needing it.)
-    return sdkErrorResult(call2.error, onSdkError, usages, deps.logger);
-  }
-  usages.push(call2.usage);
-
-  const validated2 = validateSemanticOutput(
-    call2.toolInput,
-    input.acceptanceCriteria,
-  );
-  if ('payload' in validated2) {
-    // Call 2 succeeded after call 1 failed: capture call 2 (no errors)
-    // and return ok with the debug artifact attached so we can see what
-    // shape the retry produced.
-    debugCalls.push({
-      userPrompt: retryPrompt,
-      rawToolInput: call2.toolInput,
-    });
-    const result = shapeOk(validated2.payload.perCriterion, usages, truncated);
-    if (result.ok) {
-      return {
-        ...result,
-        debug: {
-          systemPrompt: SEMANTIC_SYSTEM_PROMPT,
-          calls: debugCalls,
-          finalOutcome: 'ok',
-        },
-      };
+  for (const c of allCalls) {
+    usages.push(...c.usages);
+    if (c.judgment) {
+      perCriterion.push(c.judgment);
     }
-    return result;
+    if (c.error) {
+      verifierErrors.push({
+        criterion: c.criterion,
+        reason: c.error.reason,
+        message: c.error.message,
+      });
+    }
+    // Debug payload: one entry per criterion, capturing the FINAL state.
+    debugCalls.push({
+      criterionIndex: c.criterionIndex,
+      criterion: c.criterion,
+      userPrompt: c.finalUserPrompt,
+      rawToolInput: c.finalRawToolInput,
+      validatorOutcome: c.judgment
+        ? { ok: true }
+        : {
+            ok: false,
+            reason: c.error?.reason === 'sdk_error' ? 'sdk_error' : 'invalid_output',
+            errors: c.error ? [c.error.message] : ['(no detail captured)'],
+          },
+    });
   }
 
-  // Both calls failed validation.
-  debugCalls.push({
-    userPrompt: retryPrompt,
-    rawToolInput: call2.toolInput,
-    validatorErrors: [...validated2.errors],
-  });
-  deps.logger?.error('semantic-verifier: call 2 also invalid; giving up', {
-    errors: validated2.errors,
-  });
-  return {
-    ok: false,
-    reason: 'invalid_output',
-    message: `semantic verifier produced invalid output twice: ${validated2.errors.join('; ')}`,
+  // Refinement A: debug artifact written when ANY call (across any
+  // criterion) failed validation — INCLUDING when a retry recovered.
+  // This preserves the cross-call diagnostic surface we want for
+  // post-mortems. SDK-error-only criteria don't trigger debug
+  // (there's no model output to compare against).
+  const anyValidationFailure = allCalls.some((c) => c.hadValidationFailure);
+
+  // Whole-task SDK-error skip: every call ended in SDK error AND
+  // onSdkError is 'skip'. The composer (runVerifier) accepts the
+  // exit-code verdict alone.
+  const allSdkErrors =
+    verifierErrors.length === allCalls.length &&
+    verifierErrors.every((e) => e.reason === 'sdk_error');
+  if (allSdkErrors && onSdkError === 'skip') {
+    deps.logger?.warn(
+      'semantic-verifier: all calls SDK-errored, skipping per onSdkError=skip',
+      { errors: verifierErrors.length },
+    );
+    return {
+      ok: false,
+      reason: 'skipped',
+      message: `all ${allCalls.length} per-criterion calls SDK-errored: ${verifierErrors[0]?.message}`,
+      usages,
+    };
+  }
+
+  const matches = perCriterion.length === allCalls.length && perCriterion.every((c) => c.met);
+
+  const result: Extract<SemanticVerifierResult, { ok: true }> = {
+    ok: true,
+    matches,
+    perCriterion,
+    verifierErrors,
     usages,
-    debug: {
+    diffTruncated: truncated,
+  };
+  if (anyValidationFailure) {
+    result.debug = {
       systemPrompt: SEMANTIC_SYSTEM_PROMPT,
       calls: debugCalls,
-      finalOutcome: 'invalid_output',
-    },
-  };
+    };
+  }
+  return result;
 }
 
 // --- internals ------------------------------------------------------------
 
-type CallSuccess = { toolInput: unknown; usage: TokenUsage };
-type CallFailure = { error: string };
+type PerCallResult = {
+  criterionIndex: number;
+  criterion: string;
+  finalUserPrompt: string;
+  finalRawToolInput: unknown;
+  judgment?: PerCriterionJudgment;
+  error?: { reason: 'sdk_error' | 'invalid_output'; message: string };
+  usages: TokenUsage[];
+  /**
+   * True if any SDK call for this criterion returned a tool_use that
+   * failed validation — regardless of whether a subsequent retry
+   * recovered. Refinement A: this triggers the debug artifact for the
+   * whole task, capturing ALL criteria's final state.
+   */
+  hadValidationFailure: boolean;
+};
 
-async function callSemanticOnce(
+/**
+ * Run one criterion through the verifier with up to 1 retry on invalid
+ * output. Independent per-call retry: criterion N's retry does not
+ * block criterion M's primary call.
+ */
+async function callOne(
   deps: SemanticVerifierDeps,
   model: string,
-  userPrompt: string,
-): Promise<CallSuccess | CallFailure> {
+  diff: string,
+  criterion: string,
+  criterionIndex: number,
+): Promise<PerCallResult> {
+  const usages: TokenUsage[] = [];
+
+  const prompt1 = buildSemanticUserPrompt(diff, criterion);
+  const call1 = await sdkCall(deps, model, prompt1);
+  if ('error' in call1) {
+    return {
+      criterionIndex,
+      criterion,
+      finalUserPrompt: prompt1.cachedPrefix + prompt1.criterionSuffix,
+      finalRawToolInput: null,
+      error: { reason: 'sdk_error', message: call1.error },
+      usages,
+      hadValidationFailure: false,
+    };
+  }
+  usages.push(call1.usage);
+
+  const validated1 = validateSingleJudgment(call1.toolInput, criterion);
+  if ('judgment' in validated1) {
+    return {
+      criterionIndex,
+      criterion,
+      finalUserPrompt: prompt1.cachedPrefix + prompt1.criterionSuffix,
+      finalRawToolInput: call1.toolInput,
+      judgment: validated1.judgment,
+      usages,
+      hadValidationFailure: false,
+    };
+  }
+
+  // Call 1 failed validation. Retry. The hadValidationFailure flag is
+  // now true regardless of whether call 2 recovers — refinement A.
+  deps.logger?.warn(
+    'semantic-verifier: criterion call 1 invalid; retrying',
+    { criterionIndex, errors: validated1.errors },
+  );
+  const prompt2 = buildSemanticRetryUserPrompt(diff, criterion, validated1.errors);
+  const call2 = await sdkCall(deps, model, prompt2);
+  if ('error' in call2) {
+    return {
+      criterionIndex,
+      criterion,
+      finalUserPrompt: prompt2.cachedPrefix + prompt2.criterionSuffix,
+      finalRawToolInput: null,
+      error: { reason: 'sdk_error', message: call2.error },
+      usages,
+      hadValidationFailure: true,
+    };
+  }
+  usages.push(call2.usage);
+
+  const validated2 = validateSingleJudgment(call2.toolInput, criterion);
+  if ('judgment' in validated2) {
+    return {
+      criterionIndex,
+      criterion,
+      finalUserPrompt: prompt2.cachedPrefix + prompt2.criterionSuffix,
+      finalRawToolInput: call2.toolInput,
+      judgment: validated2.judgment,
+      usages,
+      hadValidationFailure: true,
+    };
+  }
+
+  // Both calls invalid.
+  return {
+    criterionIndex,
+    criterion,
+    finalUserPrompt: prompt2.cachedPrefix + prompt2.criterionSuffix,
+    finalRawToolInput: call2.toolInput,
+    error: {
+      reason: 'invalid_output',
+      message: `criterion produced invalid output twice: ${validated2.errors.join('; ')}`,
+    },
+    usages,
+    hadValidationFailure: true,
+  };
+}
+
+type SdkSuccess = { toolInput: unknown; usage: TokenUsage };
+type SdkFailure = { error: string };
+
+async function sdkCall(
+  deps: SemanticVerifierDeps,
+  model: string,
+  prompt: { cachedPrefix: string; criterionSuffix: string },
+): Promise<SdkSuccess | SdkFailure> {
   try {
     const response = await deps.client.messages.create({
       model,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: SEMANTIC_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages: [
+        {
+          role: 'user',
+          content: [
+            // The diff portion of the user prompt is constant across all
+            // calls within a task. Marking it with cache_control lets
+            // calls 2..N pay the cache-read rate ($0.30/MTok) on this
+            // prefix instead of the full input rate ($3/MTok).
+            {
+              type: 'text',
+              text: prompt.cachedPrefix,
+              cache_control: { type: 'ephemeral' },
+            },
+            // The criterion text varies per call and lives AFTER the
+            // cache breakpoint. It pays the full input rate but is
+            // small (~30-150 tokens).
+            {
+              type: 'text',
+              text: prompt.criterionSuffix,
+            },
+          ],
+        },
+      ],
       tools: [
         {
           name: SEMANTIC_TOOL_NAME,
           description:
-            'Submit per-criterion judgments for the diff. Each acceptance criterion gets exactly one entry with met:true|false and a one-to-three-sentence reasoning citing diff evidence.',
+            'Submit the judgment for a single acceptance criterion. Returns one object with criterion (verbatim), met (boolean), and reasoning (one-to-three sentences citing diff evidence). Do NOT return an array; do NOT wrap in another container; do NOT stringify.',
           input_schema:
             SEMANTIC_INPUT_SCHEMA as unknown as Anthropic.Tool.InputSchema,
         },
@@ -287,28 +412,4 @@ function capDiff(diff: string): { diff: string; truncated: boolean } {
     diff: `${head}${TRUNCATION_MARKER}\n[truncated: ${diff.length - DIFF_CAP_BYTES} more bytes]`,
     truncated: true,
   };
-}
-
-function shapeOk(
-  perCriterion: ReadonlyArray<PerCriterionJudgment>,
-  usages: TokenUsage[],
-  diffTruncated: boolean,
-): SemanticVerifierResult {
-  const matches = perCriterion.every((c) => c.met);
-  return { ok: true, matches, perCriterion, usages, diffTruncated };
-}
-
-function sdkErrorResult(
-  message: string,
-  onSdkError: SemanticOnSdkError,
-  usages: TokenUsage[],
-  logger?: Logger,
-): SemanticVerifierResult {
-  if (onSdkError === 'skip') {
-    logger?.warn('semantic-verifier: SDK error, skipping per onSdkError=skip', {
-      message,
-    });
-    return { ok: false, reason: 'skipped', message, usages };
-  }
-  return { ok: false, reason: 'sdk_error', message, usages };
 }

@@ -157,43 +157,34 @@ export async function runVerifier(
   );
 
   if (!semantic.ok) {
-    if (semantic.reason === 'skipped') {
-      // onSdkError === 'skip': accept the exit-code verdict alone.
-      logger?.warn(
-        'verifier: semantic step skipped due to SDK error; exit-code verdict stands',
-        { runId: run.id, message: semantic.message },
-      );
-      return {
-        verdict: skippedSemantic(
-          exitVerdict,
-          `semantic step skipped: ${semantic.message}`,
-        ),
-        usages: semantic.usages,
-      };
-    }
-    // sdk_error (strict) or invalid_output: fail the verdict.
-    const failed: Verdict = {
-      ...exitVerdict,
-      pass: false,
-      semanticCheck: {
-        matches: false,
-        reasoning: `semantic verifier failed (${semantic.reason}): ${semantic.message}`,
-      },
-    };
-    const result: RunVerifierResult = {
-      verdict: failed,
+    // Whole-task skip: every per-criterion call SDK-errored AND
+    // onSdkError is 'skip'. Accept the exit-code verdict alone.
+    logger?.warn(
+      'verifier: semantic step skipped due to SDK error; exit-code verdict stands',
+      { runId: run.id, message: semantic.message },
+    );
+    return {
+      verdict: skippedSemantic(
+        exitVerdict,
+        `semantic step skipped: ${semantic.message}`,
+      ),
       usages: semantic.usages,
     };
-    if (semantic.debug !== undefined) result.semanticDebug = semantic.debug;
-    return result;
   }
 
+  // semantic.ok === true: we have per-criterion data (some judgments may
+  // be missing if individual calls failed). matches is false if any
+  // criterion is unmet OR any call errored.
   const composed: Verdict = {
     ...exitVerdict,
     pass: exitVerdict.pass && semantic.matches,
     semanticCheck: {
       matches: semantic.matches,
-      reasoning: summarizeReasoning(semantic.perCriterion, semantic.diffTruncated),
+      reasoning: summarizeReasoning(
+        semantic.perCriterion,
+        semantic.verifierErrors,
+        semantic.diffTruncated,
+      ),
       perCriterion: semantic.perCriterion.map((c) => ({
         criterion: c.criterion,
         met: c.met,
@@ -218,10 +209,17 @@ function skippedSemantic(exitVerdict: Verdict, reasoning: string): Verdict {
 
 function summarizeReasoning(
   judgments: ReadonlyArray<{ met: boolean }>,
+  verifierErrors: ReadonlyArray<{ criterion: string; reason: string; message: string }>,
   diffTruncated: boolean,
 ): string {
   const met = judgments.filter((c) => c.met).length;
-  const total = judgments.length;
+  const totalAttempted = judgments.length + verifierErrors.length;
   const prefix = diffTruncated ? '[diff truncated] ' : '';
-  return `${prefix}${met}/${total} acceptance criteria met`;
+  if (verifierErrors.length === 0) {
+    return `${prefix}${met}/${totalAttempted} acceptance criteria met`;
+  }
+  const errorDetail = verifierErrors
+    .map((e) => `"${e.criterion}" (${e.reason})`)
+    .join(', ');
+  return `${prefix}${met}/${totalAttempted} acceptance criteria met; ${verifierErrors.length} verifier error(s): ${errorDetail}`;
 }

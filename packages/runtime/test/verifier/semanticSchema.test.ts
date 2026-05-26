@@ -1,188 +1,121 @@
 import { describe, expect, it } from 'vitest';
-import { validateSemanticOutput } from '../../src/verifier/semanticValidate.js';
+import { validateSingleJudgment } from '../../src/verifier/semanticValidate.js';
+import { SEMANTIC_INPUT_SCHEMA } from '../../src/verifier/semanticSchema.js';
 
-const criteria = ['foo is bar', 'baz is qux'];
+const expectedCriterion = 'foo is bar';
 
 function valid(): unknown {
-  return {
-    perCriterion: [
-      { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
-      { criterion: 'baz is qux', met: false, reasoning: 'ev2' },
-    ],
-  };
+  return { criterion: 'foo is bar', met: true, reasoning: 'ev1' };
 }
 
-describe('validateSemanticOutput: happy path', () => {
-  it('accepts a valid per-criterion array', () => {
-    const r = validateSemanticOutput(valid(), criteria);
-    expect('payload' in r).toBe(true);
-    if ('payload' in r) {
-      expect(r.payload.perCriterion).toHaveLength(2);
-      expect(r.payload.perCriterion[0]?.met).toBe(true);
+describe('validateSingleJudgment: happy path', () => {
+  it('accepts a valid single judgment', () => {
+    const r = validateSingleJudgment(valid(), expectedCriterion);
+    expect('judgment' in r).toBe(true);
+    if ('judgment' in r) {
+      expect(r.judgment.criterion).toBe('foo is bar');
+      expect(r.judgment.met).toBe(true);
+      expect(r.judgment.reasoning).toBe('ev1');
     }
   });
 
-  it('accepts when output reorders criteria from input', () => {
-    const reordered = {
-      perCriterion: [
-        { criterion: 'baz is qux', met: false, reasoning: 'ev2' },
-        { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
-      ],
-    };
-    const r = validateSemanticOutput(reordered, criteria);
-    expect('payload' in r).toBe(true);
+  it('accepts whitespace-only differences in the criterion echo', () => {
+    const r = validateSingleJudgment(
+      { criterion: 'foo  is bar', met: true, reasoning: 'r' },
+      expectedCriterion,
+    );
+    expect('judgment' in r).toBe(true);
   });
 
-  it('accepts whitespace-only differences and strips trailing punctuation', () => {
-    const out = {
-      perCriterion: [
-        { criterion: 'foo  is bar.', met: true, reasoning: 'ev1' },
-        { criterion: 'baz is qux', met: false, reasoning: 'ev2' },
-      ],
-    };
-    const r = validateSemanticOutput(out, criteria);
-    expect('payload' in r).toBe(true);
+  it('accepts trailing-punctuation strip on the criterion echo', () => {
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar.', met: false, reasoning: 'r' },
+      expectedCriterion,
+    );
+    expect('judgment' in r).toBe(true);
   });
 });
 
-describe('validateSemanticOutput: structural rejections', () => {
+describe('validateSingleJudgment: structural rejections', () => {
+  it('rejects null input', () => {
+    expect('errors' in validateSingleJudgment(null, expectedCriterion)).toBe(true);
+  });
+
   it('rejects non-object input', () => {
-    expect('errors' in validateSemanticOutput(null, criteria)).toBe(true);
-    expect('errors' in validateSemanticOutput('string', criteria)).toBe(true);
-    expect('errors' in validateSemanticOutput([], criteria)).toBe(true);
+    expect('errors' in validateSingleJudgment('string', expectedCriterion)).toBe(true);
+    expect('errors' in validateSingleJudgment(42, expectedCriterion)).toBe(true);
   });
 
-  it('rejects missing perCriterion', () => {
-    const r = validateSemanticOutput({}, criteria);
-    expect('errors' in r).toBe(true);
-    if ('errors' in r) {
-      expect(r.errors[0]).toMatch(/missing field: perCriterion/);
-    }
-  });
-
-  it('rejects perCriterion not an array', () => {
-    const r = validateSemanticOutput({ perCriterion: 'oops' }, criteria);
-    expect('errors' in r).toBe(true);
-  });
-
-  it('ACCEPTS perCriterion as a string containing a JSON-encoded array (wire-format accommodation)', () => {
-    // Sonnet 4.6 was observed (CHECKPOINT 3 re-runs, split-module task)
-    // producing perCriterion as a stringified JSON array. The substantive
-    // judgments are correct; only the wire format is wrong. Accommodation:
-    // we JSON.parse the string and re-validate. See
-    // BACKLOG#polish-validator-stringified-array-accommodation.
-    const inner = [
-      { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
-      { criterion: 'baz is qux', met: false, reasoning: 'ev2' },
-    ];
-    const r = validateSemanticOutput(
-      { perCriterion: JSON.stringify(inner) },
-      criteria,
-    );
-    expect('payload' in r).toBe(true);
-    if ('payload' in r) {
-      expect(r.payload.perCriterion).toHaveLength(2);
-      expect(r.payload.perCriterion[0]?.criterion).toBe('foo is bar');
-      expect(r.payload.perCriterion[1]?.met).toBe(false);
-    }
-  });
-
-  it('rejects perCriterion as a non-array string even after JSON.parse (parsed value is not an array)', () => {
-    // Edge case: model wraps in stringified object instead of array.
-    // The accommodation parses but rejects because the parsed value
-    // still isn't an array.
-    const r = validateSemanticOutput(
-      { perCriterion: JSON.stringify({ keyed: 'by criterion' }) },
-      criteria,
+  it('rejects array input (would have been the OLD shape)', () => {
+    const r = validateSingleJudgment(
+      [{ criterion: 'foo is bar', met: true, reasoning: 'r' }],
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
     if ('errors' in r) {
-      expect(r.errors[0]).toMatch(/perCriterion is not an array/);
+      expect(r.errors[0]).toMatch(/not an object/);
     }
   });
 
-  it('rejects perCriterion as a string that is not valid JSON', () => {
-    // JSON.parse throws; catch swallows; falls through to array check.
-    const r = validateSemanticOutput(
-      { perCriterion: 'not json at all' },
-      criteria,
+  it('rejects missing criterion', () => {
+    const r = validateSingleJudgment(
+      { met: true, reasoning: 'r' },
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
     if ('errors' in r) {
-      expect(r.errors[0]).toMatch(/perCriterion is not an array/);
+      expect(r.errors[0]).toMatch(/criterion/);
     }
   });
 
-  it('rejects empty perCriterion array', () => {
-    const r = validateSemanticOutput({ perCriterion: [] }, criteria);
+  it('rejects empty criterion', () => {
+    const r = validateSingleJudgment(
+      { criterion: '', met: true, reasoning: 'r' },
+      expectedCriterion,
+    );
+    expect('errors' in r).toBe(true);
+  });
+
+  it('rejects missing met', () => {
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar', reasoning: 'r' },
+      expectedCriterion,
+    );
     expect('errors' in r).toBe(true);
     if ('errors' in r) {
-      expect(r.errors[0]).toMatch(/empty/);
+      expect(r.errors[0]).toMatch(/met/);
     }
   });
 
-  it('rejects entry missing criterion', () => {
-    const r = validateSemanticOutput(
-      {
-        perCriterion: [
-          { met: true, reasoning: 'r' },
-          { criterion: 'baz is qux', met: false, reasoning: 'r' },
-        ],
-      },
-      criteria,
+  it('rejects non-boolean met', () => {
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar', met: 'yes', reasoning: 'r' },
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
   });
 
-  it('rejects entry missing met', () => {
-    const r = validateSemanticOutput(
-      {
-        perCriterion: [
-          { criterion: 'foo is bar', reasoning: 'r' },
-          { criterion: 'baz is qux', met: false, reasoning: 'r' },
-        ],
-      },
-      criteria,
+  it('rejects missing reasoning', () => {
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar', met: true },
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
   });
 
-  it('rejects entry missing reasoning', () => {
-    const r = validateSemanticOutput(
-      {
-        perCriterion: [
-          { criterion: 'foo is bar', met: true },
-          { criterion: 'baz is qux', met: false, reasoning: 'r' },
-        ],
-      },
-      criteria,
+  it('rejects empty reasoning', () => {
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar', met: true, reasoning: '' },
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
   });
 
-  it('rejects entry with empty reasoning', () => {
-    const r = validateSemanticOutput(
-      {
-        perCriterion: [
-          { criterion: 'foo is bar', met: true, reasoning: '' },
-          { criterion: 'baz is qux', met: false, reasoning: 'r' },
-        ],
-      },
-      criteria,
-    );
-    expect('errors' in r).toBe(true);
-  });
-
-  it('rejects entry with reasoning over 500 chars', () => {
+  it('rejects reasoning over 500 chars', () => {
     const long = 'x'.repeat(501);
-    const r = validateSemanticOutput(
-      {
-        perCriterion: [
-          { criterion: 'foo is bar', met: true, reasoning: long },
-          { criterion: 'baz is qux', met: false, reasoning: 'r' },
-        ],
-      },
-      criteria,
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar', met: true, reasoning: long },
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
     if ('errors' in r) {
@@ -191,37 +124,48 @@ describe('validateSemanticOutput: structural rejections', () => {
   });
 });
 
-describe('validateSemanticOutput: strict criterion-match policy', () => {
-  it('rejects when output omits an input criterion', () => {
-    const r = validateSemanticOutput(
-      {
-        perCriterion: [
-          { criterion: 'foo is bar', met: true, reasoning: 'r' },
-        ],
-      },
-      criteria,
+describe('validateSingleJudgment: strict criterion-echo policy', () => {
+  it('rejects when model paraphrases the criterion', () => {
+    // expected: "foo is bar"; model returned: "foo equals bar"
+    const r = validateSingleJudgment(
+      { criterion: 'foo equals bar', met: true, reasoning: 'r' },
+      expectedCriterion,
     );
     expect('errors' in r).toBe(true);
     if ('errors' in r) {
       expect(r.errors[0]).toMatch(/not echoed verbatim/);
+      expect(r.errors[0]).toMatch(/Paraphrasing is rejected/);
     }
   });
 
-  it('rejects when model paraphrases a criterion (refinement H)', () => {
-    // input: "foo is bar (with detail)"; output: "foo is bar"
-    const withDetail = ['foo is bar (with detail)', 'baz is qux'];
-    const paraphrased = {
-      perCriterion: [
-        { criterion: 'foo is bar', met: true, reasoning: 'r' },
-        { criterion: 'baz is qux', met: false, reasoning: 'r' },
-      ],
-    };
-    const r = validateSemanticOutput(paraphrased, withDetail);
+  it('rejects when model truncates the criterion', () => {
+    // expected: "foo is bar (with detail)"; model returned: "foo is bar"
+    const r = validateSingleJudgment(
+      { criterion: 'foo is bar', met: true, reasoning: 'r' },
+      'foo is bar (with detail)',
+    );
     expect('errors' in r).toBe(true);
-    if ('errors' in r) {
-      expect(r.errors[0]).toMatch(/not echoed verbatim/);
-      expect(r.errors[0]).toMatch(/foo is bar \(with detail\)/);
-      expect(r.errors[0]).toMatch(/Paraphrasing is rejected/);
-    }
+  });
+});
+
+describe('SEMANTIC_INPUT_SCHEMA regression guard', () => {
+  // Refinement C from docs/per-criterion-verifier-refactor.md:
+  // the schema is the contract that prevents the array-shape failure
+  // class. If a future refactor accidentally reintroduces the array
+  // shape, this test catches it.
+  it('does NOT contain a perCriterion field', () => {
+    const props = (SEMANTIC_INPUT_SCHEMA as { properties: Record<string, unknown> }).properties;
+    expect(props).not.toHaveProperty('perCriterion');
+  });
+
+  it('has criterion, met, reasoning as top-level required fields', () => {
+    const schema = SEMANTIC_INPUT_SCHEMA as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(schema.properties).toHaveProperty('criterion');
+    expect(schema.properties).toHaveProperty('met');
+    expect(schema.properties).toHaveProperty('reasoning');
+    expect(schema.required).toEqual(['criterion', 'met', 'reasoning']);
   });
 });

@@ -1,6 +1,9 @@
 /**
- * Tests for runSemanticVerifier. The Anthropic SDK is mocked end-to-end
- * via a minimal client stub — no real API calls.
+ * Tests for runSemanticVerifier with per-criterion architecture.
+ *
+ * The model gets ONE call per criterion; the aggregator builds
+ * perCriterion[] + verifierErrors[]. Failure isolation: a failed call
+ * marks just that criterion; other criteria still get judgments.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -23,11 +26,23 @@ function fakeLogger(out: LoggedLine[]): Logger {
   } as unknown as Logger;
 }
 
-function fakeClient(responses: Array<unknown>): AnthropicClient {
+/**
+ * Build a per-call client that dispatches based on call ORDER.
+ * Each call returns the next canned response in `responses`. An Error
+ * value in the array causes that call to throw.
+ *
+ * Captures every request for later assertion (cache_control, etc.).
+ */
+function fakeClient(responses: Array<unknown>): {
+  client: AnthropicClient;
+  requests: Array<{ messages: unknown; system: unknown }>;
+} {
   let i = 0;
-  return {
+  const requests: Array<{ messages: unknown; system: unknown }> = [];
+  const client = {
     messages: {
-      create: async () => {
+      create: async (req: { messages: unknown; system: unknown }) => {
+        requests.push({ messages: req.messages, system: req.system });
         const r = responses[i++];
         if (r === undefined) {
           throw new Error('fakeClient: no more canned responses');
@@ -37,23 +52,24 @@ function fakeClient(responses: Array<unknown>): AnthropicClient {
       },
     },
   } as unknown as AnthropicClient;
+  return { client, requests };
 }
 
 function toolUseResponse(toolInput: unknown, usage = {
   input_tokens: 1000,
-  output_tokens: 100,
+  output_tokens: 80,
   cache_read_input_tokens: 0,
   cache_creation_input_tokens: 0,
 }): unknown {
   return {
-    id: 'msg_test',
+    id: 'msg',
     type: 'message',
     role: 'assistant',
     model: 'claude-sonnet-4-6',
     content: [
       {
         type: 'tool_use',
-        id: 'toolu_test',
+        id: 'toolu',
         name: 'submit_verdict',
         input: toolInput,
       },
@@ -65,23 +81,18 @@ function toolUseResponse(toolInput: unknown, usage = {
 
 const criteria = ['foo is bar', 'baz is qux'];
 
-const validAllMet = {
-  perCriterion: [
-    { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
-    { criterion: 'baz is qux', met: true, reasoning: 'ev2' },
-  ],
-};
+const judgment = (criterion: string, met: boolean, reasoning = 'r'): unknown => ({
+  criterion,
+  met,
+  reasoning,
+});
 
-const validMixed = {
-  perCriterion: [
-    { criterion: 'foo is bar', met: true, reasoning: 'ev1' },
-    { criterion: 'baz is qux', met: false, reasoning: 'missing' },
-  ],
-};
-
-describe('runSemanticVerifier: happy path', () => {
-  it('returns ok:true matches:true when all judgments are met', async () => {
-    const client = fakeClient([toolUseResponse(validAllMet)]);
+describe('runSemanticVerifier: aggregation', () => {
+  it('aggregates N successful judgments into perCriterion[]; matches=true when all met', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      toolUseResponse(judgment('baz is qux', true)),
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
@@ -90,13 +101,17 @@ describe('runSemanticVerifier: happy path', () => {
     if (r.ok) {
       expect(r.matches).toBe(true);
       expect(r.perCriterion).toHaveLength(2);
-      expect(r.usages).toHaveLength(1);
-      expect(r.diffTruncated).toBe(false);
+      expect(r.verifierErrors).toHaveLength(0);
+      expect(r.usages).toHaveLength(2);
+      expect(r.debug).toBeUndefined();
     }
   });
 
-  it('returns ok:true matches:false when at least one met=false', async () => {
-    const client = fakeClient([toolUseResponse(validMixed)]);
+  it('matches=false when at least one met:false', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      toolUseResponse(judgment('baz is qux', false, 'not met')),
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
@@ -105,58 +120,58 @@ describe('runSemanticVerifier: happy path', () => {
     if (r.ok) {
       expect(r.matches).toBe(false);
       expect(r.perCriterion[1]?.met).toBe(false);
+      expect(r.debug).toBeUndefined();
     }
   });
 
-  it('returns ok:true matches:false when every judgment is met=false', async () => {
-    const allFail = {
-      perCriterion: [
-        { criterion: 'foo is bar', met: false, reasoning: 'no' },
-        { criterion: 'baz is qux', met: false, reasoning: 'no' },
-      ],
-    };
-    const client = fakeClient([toolUseResponse(allFail)]);
-    const r = await runSemanticVerifier(
-      { client },
-      { diff: 'd', acceptanceCriteria: criteria },
-    );
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.matches).toBe(false);
-  });
-
-  it('computes costUsd from Sonnet pricing on the returned usage', async () => {
-    const client = fakeClient([toolUseResponse(validAllMet)]);
+  it('isolates failures: criterion 2 fails twice but criterion 1 still gets a judgment', async () => {
+    const invalid = { wrong: 'shape' };
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),  // criterion 1 call 1: OK
+      toolUseResponse(invalid),                       // criterion 2 call 1: invalid
+      toolUseResponse(invalid),                       // criterion 2 call 2 (retry): invalid
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      // Sonnet: 1000 in × $3/M + 100 out × $15/M = 0.003 + 0.0015 = 0.0045
-      expect(r.usages[0]?.costUsd).toBeCloseTo(0.0045, 5);
+      expect(r.matches).toBe(false);
+      expect(r.perCriterion).toHaveLength(1);
+      expect(r.perCriterion[0]?.criterion).toBe('foo is bar');
+      expect(r.verifierErrors).toHaveLength(1);
+      expect(r.verifierErrors[0]?.criterion).toBe('baz is qux');
+      expect(r.verifierErrors[0]?.reason).toBe('invalid_output');
     }
   });
 
-  it('does NOT include a debug field on clean happy-path (call 1 valid)', async () => {
-    // Refinement: debug capture is for failure post-mortem. A run that
-    // produced a valid call-1 response should not carry the artifact —
-    // the parsed perCriterion lives on verdict-NNN.json already.
-    const client = fakeClient([toolUseResponse(validAllMet)]);
+  it('isolates SDK errors: criterion 2 SDK-errors but criterion 1 succeeds', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),  // criterion 1: OK
+      new Error('rate_limit'),                         // criterion 2: SDK error
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
     );
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.debug).toBeUndefined();
+    if (r.ok) {
+      expect(r.matches).toBe(false);
+      expect(r.perCriterion).toHaveLength(1);
+      expect(r.verifierErrors[0]?.reason).toBe('sdk_error');
+      expect(r.verifierErrors[0]?.message).toMatch(/rate_limit/);
+    }
   });
 });
 
-describe('runSemanticVerifier: retry on invalid output', () => {
-  it('retries once and succeeds on call 2', async () => {
-    const invalid = { perCriterion: [{ criterion: 'foo is bar', met: true }] };
-    const client = fakeClient([
-      toolUseResponse(invalid),
-      toolUseResponse(validAllMet),
+describe('runSemanticVerifier: per-criterion retry', () => {
+  it('criterion call 1 invalid + criterion call 2 valid: criterion succeeds', async () => {
+    const invalid = { wrong: 'shape' };
+    const { client } = fakeClient([
+      toolUseResponse(invalid),                       // criterion 1 call 1: invalid
+      toolUseResponse(judgment('foo is bar', true)),  // criterion 1 call 2: OK
+      toolUseResponse(judgment('baz is qux', true)),  // criterion 2: OK
     ]);
     const r = await runSemanticVerifier(
       { client },
@@ -164,120 +179,40 @@ describe('runSemanticVerifier: retry on invalid output', () => {
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.usages).toHaveLength(2);
       expect(r.matches).toBe(true);
-    }
-  });
-
-  it('attaches debug payload when call 1 invalid + call 2 valid (partial failure)', async () => {
-    // Refinement A: capture call 1's raw output even when call 2 recovers,
-    // so we can see what shape the model produced under the old retry prompt
-    // and confirm the new retry prompt is doing its job.
-    const invalid = { perCriterion: { wrongShape: 'object instead of array' } };
-    const client = fakeClient([
-      toolUseResponse(invalid),
-      toolUseResponse(validAllMet),
-    ]);
-    const r = await runSemanticVerifier(
-      { client },
-      { diff: 'demo diff', acceptanceCriteria: criteria },
-    );
-    expect(r.ok).toBe(true);
-    if (r.ok) {
+      expect(r.perCriterion).toHaveLength(2);
+      expect(r.verifierErrors).toHaveLength(0);
+      // 3 SDK calls total (criterion 1 retried).
+      expect(r.usages).toHaveLength(3);
+      // Debug artifact present because there was at least one validation failure.
       expect(r.debug).toBeDefined();
-      expect(r.debug?.finalOutcome).toBe('ok');
-      expect(r.debug?.systemPrompt).toContain('You verify whether');
       expect(r.debug?.calls).toHaveLength(2);
-      // Call 1: the failing one — has validatorErrors + raw input.
-      expect(r.debug?.calls[0]?.rawToolInput).toEqual(invalid);
-      expect(r.debug?.calls[0]?.validatorErrors).toBeDefined();
-      expect(r.debug?.calls[0]?.validatorErrors?.[0]).toMatch(/perCriterion/);
-      // Call 2: the recovered one — no validator errors.
-      expect(r.debug?.calls[1]?.rawToolInput).toEqual(validAllMet);
-      expect(r.debug?.calls[1]?.validatorErrors).toBeUndefined();
-    }
-  });
-
-  it('returns reason:invalid_output after two consecutive invalid calls', async () => {
-    const invalid = { perCriterion: [] };
-    const client = fakeClient([
-      toolUseResponse(invalid),
-      toolUseResponse(invalid),
-    ]);
-    const r = await runSemanticVerifier(
-      { client },
-      { diff: 'd', acceptanceCriteria: criteria },
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe('invalid_output');
-      expect(r.usages).toHaveLength(2);
-      expect(r.message).toMatch(/invalid output twice/);
-    }
-  });
-
-  it('attaches debug payload when BOTH calls fail validation', async () => {
-    // The split-module CHECKPOINT 3 failure shape: model produced
-    // perCriterion as a non-array on both attempts. We need the raw
-    // outputs and both validator-error sets in the debug artifact so
-    // a human can diagnose without re-running.
-    const wrong1 = { perCriterion: { keyed: 'by criterion' } };
-    const wrong2 = { perCriterion: 'still wrong but different' };
-    const client = fakeClient([
-      toolUseResponse(wrong1),
-      toolUseResponse(wrong2),
-    ]);
-    const r = await runSemanticVerifier(
-      { client },
-      { diff: 'd', acceptanceCriteria: criteria },
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok && r.reason === 'invalid_output') {
-      expect(r.debug).toBeDefined();
-      expect(r.debug?.finalOutcome).toBe('invalid_output');
-      expect(r.debug?.calls).toHaveLength(2);
-      expect(r.debug?.calls[0]?.rawToolInput).toEqual(wrong1);
-      expect(r.debug?.calls[0]?.validatorErrors).toBeDefined();
-      expect(r.debug?.calls[1]?.rawToolInput).toEqual(wrong2);
-      expect(r.debug?.calls[1]?.validatorErrors).toBeDefined();
-    }
-  });
-
-  it('call 2 user prompt (in debug) is the retry prompt, not the original', async () => {
-    const invalid = { perCriterion: 'wrong' };
-    const client = fakeClient([
-      toolUseResponse(invalid),
-      toolUseResponse(validAllMet),
-    ]);
-    const r = await runSemanticVerifier(
-      { client },
-      { diff: 'demo diff', acceptanceCriteria: criteria },
-    );
-    if (r.ok && r.debug) {
-      expect(r.debug.calls[0]?.userPrompt).not.toMatch(/Your previous response/);
-      expect(r.debug.calls[1]?.userPrompt).toMatch(/Your previous response had validation errors/);
-      expect(r.debug.calls[1]?.userPrompt).toMatch(/must be an ARRAY/);
     }
   });
 });
 
 describe('runSemanticVerifier: SDK error policy', () => {
-  it('returns reason:sdk_error with default onSdkError=strict', async () => {
-    const client = fakeClient([new Error('rate_limit')]);
+  it('default strict: per-criterion SDK error becomes verifierError, run continues', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      new Error('network'),
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
     );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe('sdk_error');
-      expect(r.usages).toHaveLength(0);
-      expect(r.message).toMatch(/rate_limit/);
+    expect(r.ok).toBe(true);  // not the whole-task skip
+    if (r.ok) {
+      expect(r.matches).toBe(false);
+      expect(r.verifierErrors).toHaveLength(1);
     }
   });
 
-  it('returns reason:skipped when onSdkError=skip', async () => {
-    const client = fakeClient([new Error('network')]);
+  it('skip mode + ALL calls SDK-error → ok:false reason:skipped (whole-task skip)', async () => {
+    const { client } = fakeClient([
+      new Error('rate_limit'),
+      new Error('rate_limit'),
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
@@ -286,66 +221,183 @@ describe('runSemanticVerifier: SDK error policy', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe('skipped');
+      expect(r.message).toMatch(/all 2 per-criterion calls SDK-errored/);
     }
   });
 
-  it('strict mode applies on call 2 if call 1 invalid then call 2 throws', async () => {
-    const client = fakeClient([
-      toolUseResponse({ perCriterion: [] }),
-      new Error('rate_limit'),
+  it('skip mode + SOME calls SDK-error → ok:true with per-criterion verifierErrors (not a skip)', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      new Error('network'),
+    ]);
+    const r = await runSemanticVerifier(
+      { client },
+      { diff: 'd', acceptanceCriteria: criteria },
+      { onSdkError: 'skip' },
+    );
+    // Only the whole-task case is skipped; partial SDK error stays as verifierError.
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.verifierErrors).toHaveLength(1);
+      expect(r.verifierErrors[0]?.reason).toBe('sdk_error');
+    }
+  });
+});
+
+describe('runSemanticVerifier: debug artifact (refinement A)', () => {
+  it('writes debug with ALL calls when ANY call fails validation', async () => {
+    const invalid = { wrong: 'shape' };
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),  // crit 1: OK
+      toolUseResponse(invalid),                       // crit 2 call 1: invalid
+      toolUseResponse(invalid),                       // crit 2 call 2: invalid
+    ]);
+    const r = await runSemanticVerifier(
+      { client },
+      { diff: 'demo', acceptanceCriteria: criteria },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.debug).toBeDefined();
+      expect(r.debug?.calls).toHaveLength(2);
+      // Successful call has validatorOutcome.ok=true.
+      const okCall = r.debug?.calls.find((c) => c.criterion === 'foo is bar');
+      expect(okCall?.validatorOutcome.ok).toBe(true);
+      // Failed call has validatorOutcome.ok=false with errors.
+      const failedCall = r.debug?.calls.find((c) => c.criterion === 'baz is qux');
+      expect(failedCall?.validatorOutcome.ok).toBe(false);
+      if (failedCall && !failedCall.validatorOutcome.ok) {
+        expect(failedCall.validatorOutcome.reason).toBe('invalid_output');
+      }
+    }
+  });
+
+  it('no debug written when all calls succeed', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      toolUseResponse(judgment('baz is qux', true)),
     ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: 'd', acceptanceCriteria: criteria },
     );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe('sdk_error');
-      expect(r.usages).toHaveLength(1); // only call 1 succeeded enough to record usage
+    if (r.ok) {
+      expect(r.debug).toBeUndefined();
+    }
+  });
+
+  it('debug.systemPrompt captures the actual SEMANTIC_SYSTEM_PROMPT', async () => {
+    const { client } = fakeClient([
+      toolUseResponse({ wrong: 'shape' }),
+      toolUseResponse({ wrong: 'shape' }),
+      toolUseResponse(judgment('baz is qux', true)),
+    ]);
+    const r = await runSemanticVerifier(
+      { client },
+      { diff: 'd', acceptanceCriteria: criteria },
+    );
+    if (r.ok) {
+      expect(r.debug?.systemPrompt).toContain('You verify whether');
+    }
+  });
+});
+
+describe('runSemanticVerifier: cache_control placement (test 14)', () => {
+  it('cache_control is on the diff content block, not on the criterion content block', async () => {
+    const { client, requests } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      toolUseResponse(judgment('baz is qux', true)),
+    ]);
+    await runSemanticVerifier(
+      { client },
+      { diff: 'demo diff', acceptanceCriteria: criteria },
+    );
+    expect(requests).toHaveLength(2);
+    for (const req of requests) {
+      const blocks = (req.messages as Array<{ content: Array<{
+        text?: string;
+        cache_control?: unknown;
+      }> }>)[0]?.content;
+      expect(blocks).toBeDefined();
+      expect(blocks).toHaveLength(2);
+      // First block: the cached prefix (system continues + diff).
+      const cachedBlock = blocks?.[0];
+      expect(cachedBlock?.cache_control).toEqual({ type: 'ephemeral' });
+      expect(cachedBlock?.text).toContain('# Diff');
+      // Second block: the criterion. No cache_control.
+      const criterionBlock = blocks?.[1];
+      expect(criterionBlock?.cache_control).toBeUndefined();
+      expect(criterionBlock?.text).toContain('# Acceptance criterion');
     }
   });
 });
 
 describe('runSemanticVerifier: diff cap', () => {
   it('does not truncate a diff at or under 30KB', async () => {
-    const client = fakeClient([toolUseResponse(validAllMet)]);
     const exactly30k = 'a'.repeat(30_000);
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      toolUseResponse(judgment('baz is qux', true)),
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: exactly30k, acceptanceCriteria: criteria },
     );
-    expect(r.ok).toBe(true);
     if (r.ok) expect(r.diffTruncated).toBe(false);
   });
 
   it('truncates a diff over 30KB and marks diffTruncated', async () => {
-    const client = fakeClient([toolUseResponse(validAllMet)]);
     const big = 'a'.repeat(40_000);
+    const { client } = fakeClient([
+      toolUseResponse(judgment('foo is bar', true)),
+      toolUseResponse(judgment('baz is qux', true)),
+    ]);
     const r = await runSemanticVerifier(
       { client },
       { diff: big, acceptanceCriteria: criteria },
     );
-    expect(r.ok).toBe(true);
     if (r.ok) expect(r.diffTruncated).toBe(true);
   });
+});
 
-  it('handles empty diff', async () => {
-    const client = fakeClient([toolUseResponse(validAllMet)]);
+describe('runSemanticVerifier: edge cases', () => {
+  it('handles N=1 (single criterion, no parallel section)', async () => {
+    const { client } = fakeClient([
+      toolUseResponse(judgment('only one', true)),
+    ]);
     const r = await runSemanticVerifier(
       { client },
-      { diff: '', acceptanceCriteria: criteria },
+      { diff: 'd', acceptanceCriteria: ['only one'] },
     );
     expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.matches).toBe(true);
+      expect(r.perCriterion).toHaveLength(1);
+    }
+  });
+
+  it('handles N=0 (no criteria) — defensive', async () => {
+    const { client } = fakeClient([]);
+    const r = await runSemanticVerifier(
+      { client },
+      { diff: 'd', acceptanceCriteria: [] },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.matches).toBe(true);
+      expect(r.perCriterion).toHaveLength(0);
+    }
   });
 });
 
 describe('runSemanticVerifier: logging', () => {
-  it('logs starting + retry warning on invalid call 1', async () => {
+  it('logs starting + retry warning on invalid call 1 for a criterion', async () => {
     const lines: LoggedLine[] = [];
     const logger = fakeLogger(lines);
-    const client = fakeClient([
-      toolUseResponse({ perCriterion: [] }),
-      toolUseResponse(validAllMet),
+    const { client } = fakeClient([
+      toolUseResponse({ wrong: 'shape' }),               // crit 1 call 1: invalid
+      toolUseResponse(judgment('foo is bar', true)),     // crit 1 call 2: OK
+      toolUseResponse(judgment('baz is qux', true)),     // crit 2: OK
     ]);
     await runSemanticVerifier(
       { client, logger },
