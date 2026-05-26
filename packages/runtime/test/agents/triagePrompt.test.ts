@@ -101,6 +101,56 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
     );
   });
 
+  it('warns against COMPOUND runtime-claim criteria (X exists AND Y still passes)', () => {
+    // CHECKPOINT 3 second-round investigation found triage emitting
+    // compound shapes like "test/math.test.js contains a test for X
+    // and it still passes" — the simple-form anti-pattern (commit
+    // 831dfe6) didn't catch these. This bullet extends coverage to
+    // compound forms.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Compound runtime claims');
+    // Conjunctions listed by name so the model recognizes the pattern.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"and"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"also"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"plus"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"while"');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('"moreover"');
+    // Specific failing shapes from the CHECKPOINT 3 runs called out.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'contains a test for X and it still passes',
+    );
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'remains unchanged and continues to pass',
+    );
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'exports parseQuux and the new tests pass',
+    );
+    // The constructive path: split into single-form criteria.
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('split them');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'remains unchanged from the initial commit',
+    );
+  });
+
+  it('the worked examples contain NO compound runtime claims (and X passes / also Y)', () => {
+    const arrayBlocks = [
+      ...TRIAGE_SYSTEM_PROMPT.matchAll(
+        /"acceptanceCriteria":\s*\[([^\]]+)\]/g,
+      ),
+    ].map((m) => m[1]!);
+    expect(arrayBlocks.length).toBeGreaterThanOrEqual(3);
+    // The detection regex used by the eval meta-test:
+    const compoundRuntimeClaim =
+      /\b(and|also|plus|while|moreover)\s+.{0,60}\b(pass(es)?|build succeeds|works correctly|run correctly|no regressions)/i;
+    for (const block of arrayBlocks) {
+      // Split entries by line so we test each criterion individually
+      // (a block may contain a benign "and" between criteria).
+      const entries = block.match(/"[^"]+"/g) ?? [];
+      for (const entry of entries) {
+        expect(entry).not.toMatch(compoundRuntimeClaim);
+      }
+    }
+  });
+
   it('instructs the model to preserve specific behavioral verbs from task.md', () => {
     // The CHECKPOINT 3 investigation also found triage was generalizing
     // "throws RangeError" to "assertion for overflow", weakening the
