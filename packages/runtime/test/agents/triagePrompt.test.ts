@@ -247,6 +247,79 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
   });
 });
 
+describe('TRIAGE_SYSTEM_PROMPT — compound-runtime-claim regex mirror', () => {
+  // Mirror of the production detection regex from
+  // packages/cli/src/eval/instrumentation.ts (COMPOUND_RUNTIME_CLAIM_REGEX).
+  // Keep in sync — production is tightened to four shapes that exclude
+  // idiomatic "pass through" / transitive-pass uses. The earlier broad
+  // version of this regex (`/\b(and|...)\s+.{0,60}\b(pass(es)?|...)/i`)
+  // false-positived on the "X and arrays pass through unchanged" idiom
+  // that landed in infer-target-file's task.md on 2026-05-27; production
+  // code was already mostly correct, the test-file mirror was the
+  // original broad version. Now aligned, and the third alternative
+  // (standalone "pass(es)" at clause boundary) gained a negative
+  // lookahead for "through" in both files to harden against the same
+  // false-positive shape.
+  const compoundRuntimeClaim = new RegExp(
+    '\\b(?:and|also|plus|while|moreover)\\s+' +
+      '.{0,60}' +
+      '(?:' +
+      '\\b(?:tests?|build|spec|suite|verification|assertion[s]?)\\s+(?:still\\s+|continues?\\s+to\\s+)?(?:pass(?:es)?|succeed[s]?)\\b' +
+      '|' +
+      '\\b(?:still|continues?\\s+to|continue\\s+to)\\s+pass(?:es)?\\b' +
+      '|' +
+      '\\bpass(?:es)?(?!\\s+through)(?=\\s*(?:[,.;!?]|$))' +
+      '|' +
+      '\\bbuild\\s+succeeds?\\b' +
+      '|' +
+      '\\bno\\s+regressions?\\b' +
+      '|' +
+      '\\bworks?\\s+correctly\\b' +
+      '|' +
+      '\\bruns?\\s+correctly\\b' +
+      ')',
+    'i',
+  );
+
+  it('the worked examples contain NO compound runtime claims under the production regex', () => {
+    const arrayBlocks = [
+      ...TRIAGE_SYSTEM_PROMPT.matchAll(
+        /"acceptanceCriteria":\s*\[([^\]]+)\]/g,
+      ),
+    ].map((m) => m[1]!);
+    expect(arrayBlocks.length).toBeGreaterThanOrEqual(3);
+    for (const block of arrayBlocks) {
+      const entries = block.match(/"[^"]+"/g) ?? [];
+      for (const entry of entries) {
+        expect(entry).not.toMatch(compoundRuntimeClaim);
+      }
+    }
+  });
+
+  it('does not match the "pass through" idiom that surfaced in the closeout round', () => {
+    // The exact criterion shapes that the broader pre-tightening regex
+    // false-positived on (from infer-target-file post task.md
+    // tightening). The aligned production regex must NOT flag these.
+    const benign = [
+      'nested objects and arrays are passed through unchanged without recursive trimming',
+      'top-level numbers, booleans, and null values pass through unchanged',
+      'nested objects and arrays pass through unchanged (values inside nested structures are not trimmed, preserving byte-for-byte structure)',
+    ];
+    for (const s of benign) expect(s).not.toMatch(compoundRuntimeClaim);
+  });
+
+  it('still matches the compound-runtime-claim shapes the regex was built for', () => {
+    const shouldMatch = [
+      'X exists and it still passes',
+      'Y remains unchanged and continues to pass',
+      'Z is correct, plus the new tests pass',
+      'code is right and the build succeeds',
+      'the export is renamed and no regressions appear',
+    ];
+    for (const s of shouldMatch) expect(s).toMatch(compoundRuntimeClaim);
+  });
+});
+
 describe('buildTriageUserPrompt', () => {
   it('includes the task description verbatim', () => {
     const p = buildTriageUserPrompt('Add a clamp helper.', blankCtx);

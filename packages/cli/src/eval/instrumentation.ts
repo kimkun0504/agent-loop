@@ -93,8 +93,12 @@ export const COMPOUND_RUNTIME_CLAIM_REGEX = new RegExp(
     // (2) "still passes" / "continues to pass" — implicit runtime subject
     '\\b(?:still|continues?\\s+to|continue\\s+to)\\s+pass(?:es)?\\b' +
     '|' +
-    // (3) standalone "passes" / "pass" at clause boundary
-    '\\bpass(?:es)?(?=\\s*(?:[,.;!?]|$))' +
+    // (3) standalone "passes" / "pass" at clause boundary — but NOT
+    // followed by "through" (the "pass through" idiom is data-flow
+    // semantics, not test-execution, and it became more common in
+    // criteria after the 2026-05-27 task.md tightening of
+    // infer-target-file added "pass through unchanged" phrasing).
+    '\\bpass(?:es)?(?!\\s+through)(?=\\s*(?:[,.;!?]|$))' +
     '|' +
     // (4) explicit runtime phrases
     '\\bbuild\\s+succeeds?\\b' +
