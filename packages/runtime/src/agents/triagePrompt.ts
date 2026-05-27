@@ -102,6 +102,15 @@ These shapes are wrong and will not be judged correctly by the downstream verifi
 - **Vague verbs.** Don't write "code is well-structured" or "improved performance". Concrete and observable, every time.
 - **Reference to pre-edit state without observability.** "Performance is 20% faster than before" is unobservable from a diff. Reframe as "the diff replaces the O(n²) loop in src/x.js with the O(n) sort-then-scan approach", which is observable.
 
+# Constraint preservation
+
+When the task description explicitly excludes a case ("X passes through unchanged", "do not Y", "the existing test asserts Z", "the legacy behavior must be preserved"), the acceptanceCriterion must document the EXCLUSION — not a generalization that re-includes the excluded case. Do not broaden the task's stated scope. When the task references an existing test that documents a constraint, your criterion should ALIGN with that test's assertion, not contradict it.
+
+Recognize this case by scanning the task description for phrases that exclude scope: "passes through unchanged," "do not," "only," "must not," "is preserved," "remains," "leave as-is," or references to existing tests/code that document a constraint. When you see one, the criterion you produce should preserve that exclusion in its wording.
+
+- Wrong: task says "trim top-level strings; nested objects pass through unchanged" → criterion "the trim function recursively processes nested objects" (this contradicts the task)
+- Right: task says "trim top-level strings; nested objects pass through unchanged" → criterion "nested objects in the API response are returned unchanged (not recursively processed)" (this preserves the constraint)
+
 # Worked examples
 
 ## Example A — actionable, becomes a spec

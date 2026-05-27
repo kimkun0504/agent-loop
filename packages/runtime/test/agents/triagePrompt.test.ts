@@ -199,6 +199,32 @@ describe('TRIAGE_SYSTEM_PROMPT', () => {
     );
   });
 
+  it('warns against drifting from constraints stated in task.md (Constraint preservation)', () => {
+    // CHECKPOINT 3 Option E validation round (2026-05-26) found triage
+    // emitting "Nested objects are recursively processed" for
+    // infer-target-file despite task.md explicitly saying nested objects
+    // pass through unchanged. The architecture caught the contradiction;
+    // this section addresses the drift at cause.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('Constraint preservation');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('passes through unchanged');
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain(
+      'do not broaden the task',
+    );
+    // Trigger-phrase list so the model can self-apply the rule by
+    // scanning for these tokens in task.md.
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('do not');
+    expect(TRIAGE_SYSTEM_PROMPT.toLowerCase()).toContain('must not');
+    expect(TRIAGE_SYSTEM_PROMPT).toContain('references to existing tests');
+    // The example pair from the infer-target-file family is called out
+    // verbatim so the model sees both shapes.
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'recursively processes nested objects',
+    );
+    expect(TRIAGE_SYSTEM_PROMPT).toContain(
+      'returned unchanged (not recursively processed)',
+    );
+  });
+
   it('the acceptanceCriteria arrays in the worked examples contain NO runtime-claim entries', () => {
     // Earlier versions of Examples C and D included "npm test still passes"
     // / "npm test passes" as acceptanceCriteria entries — the exact pattern
